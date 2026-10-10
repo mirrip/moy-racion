@@ -225,6 +225,7 @@ const IC = {
  key: '<circle cx="8" cy="15.5" r="4" fill="currentColor" fill-opacity=".14"/><path d="M11 12.5L19.5 4M16 7.5l2.5 2.5M13.8 9.7l2 2"/>',
  history: '<path d="M4.5 12a7.5 7.5 0 1 0 2.2-5.3L4.5 9"/><path d="M4.5 4.5V9H9M12 8v4.5l3 2"/>',
  data: '<ellipse cx="12" cy="6.5" rx="7" ry="2.8" fill="currentColor" fill-opacity=".14"/><path d="M5 6.5v11c0 1.5 3.1 2.8 7 2.8s7-1.3 7-2.8v-11M5 12c0 1.5 3.1 2.8 7 2.8s7-1.3 7-2.8"/>',
+ code: '<rect x="3.5" y="4.5" width="17" height="15" rx="3" fill="currentColor" fill-opacity=".14"/><path d="M9 10l-2.5 2.5L9 15M15 10l2.5 2.5L15 15M12.8 9l-1.6 7"/>',
  chev: '<path d="M9 5l7 7-7 7"/>', back: '<path d="M15 5l-7 7 7 7"/>',
  leaf: '<path d="M5 19c0-8 5-13 14-14-1 9-6 14-14 14z" fill="currentColor" fill-opacity=".14"/><path d="M5 19l8-8"/>'
 };
@@ -579,8 +580,8 @@ function cheapen() {
 }
 
 /* ---------- Настройки ---------- */
-const SET_PAGES = [['look','Оформление','Тема и акцент'],['family','Семья','Люди и их нормы'],['diet','Рацион и питание','Приёмы пищи, тип питания, запреты'],['marks','Пометки','Нравится, не нравится, аллергии'],['health','Здоровье','Важное предупреждение'],['key','Ключ доступа','Подписка'],['history','История','Прошлая неделя'],['data','Данные','Удаление с устройства']];
-const SET_IC = {look:'look', family:'family', diet:'dish', marks:'heart', health:'shield', key:'key', history:'history', data:'data'};
+const SET_PAGES = [['look','Оформление','Тема и акцент'],['family','Семья','Люди и их нормы'],['diet','Рацион и питание','Приёмы пищи, тип питания, запреты'],['marks','Пометки','Нравится, не нравится, аллергии'],['health','Здоровье','Важное предупреждение'],['key','Ключ доступа','Подписка'],['history','История','Прошлая неделя'],['data','Данные','Удаление с устройства'],['system','Системный','Промпт для нейросети · в разработке']];
+const SET_IC = {look:'look', family:'family', diet:'dish', marks:'heart', health:'shield', key:'key', history:'history', data:'data', system:'code'};
 function viewSettings() {
   const st = S.settings, M = S.marks, pg = S.ui.set, v = $('#view');
   if (!pg) {
@@ -614,6 +615,22 @@ function viewSettings() {
     <p class="hint">Если отметить хотя бы одно, автоматический сбор рациона отключится.</p>`;
   if (pg === 'key') body = `<div class="panel"><label class="field"><span><em>Ключ доступа</em><input id="st-key" type="password" autocomplete="off" value="${esc(st.apiKey)}" placeholder="Ключ из Telegram-бота"></span></label></div><p class="hint">Ключ также запрашивается при нажатии «Собрать рацион». Без ключа работает демо-режим.</p>`;
   if (pg === 'history') body = S.lastWeek ? historyHtml() : '<div class="empty"><h3>Истории пока нет</h3><p>Прошлая неделя появится здесь после окончания текущей.</p></div>';
+  if (pg === 'system') {
+    let sample;
+    try {
+      const day = S.plan ? Math.min(S.ui.day, S.plan.len - 1) : 0, slot = 0;
+      const pat = pattern(), tg = S.plan ? slotTarget(day, slot) : (() => { const f = familyDay(), sh = pat[0][2] / 100; return {E: f.E * sh, P: f.P * pat[0][3] / 100, F: f.F * sh, C: f.C * sh, fib: f.fib * sh}; })();
+      sample = {meal: pat[slot][1], people: S.people.length, target_family: {kcal: r0(tg.E), protein_g: r0(tg.P), fat_g: r0(tg.F), carbs_g: r0(tg.C), fiber_g: r0(tg.fib)},
+        diet: st.diet, forbidden: [...st.forbidden, ...S.marks.allergy], dislike: S.marks.dislike, liked: S.marks.like, not_these: [], desired: S.collect.desired,
+        difficulty: S.collect.diff, max_time_min: +S.collect.maxTime || null, cuisine: S.collect.cuisine || null, home_products: S.collect.homeOn ? S.collect.home : []};
+    } catch (e) { sample = {error: e.message}; }
+    body = `<div class="alert">${ic('code')}<div><b>Только для разработчика</b><p>Раздел в разработке. Здесь показано ровно то, что приложение отправляет нейросети при подборе одной карточки.</p></div></div>
+    <h4>Куда уходит запрос</h4><div class="panel"><div class="field col"><em>Сервис</em><code class="mono-t">Gemini API · generateContent</code></div><div class="field col"><em>Модели (по очереди)</em><code class="mono-t">${GEMINI_MODELS.join(' → ')}</code></div><div class="field col"><em>Ключ</em><code class="mono-t">${st.apiKey ? 'введён · ' + st.apiKey.length + ' симв.' : 'не введён — демо-режим, запросов нет'}</code></div><div class="field col"><em>Параметры</em><code class="mono-t">temperature 0.9 · ответ JSON</code></div></div>
+    <h4>Системный промпт</h4><pre class="code">${esc(SYSTEM_PROMPT)}</pre>
+    <h4>Сообщение пользователя · пример для первого приёма</h4><pre class="code">${esc(JSON.stringify(sample, null, 2))}</pre>
+    <p class="hint">Цели приёма приложение пересчитывает перед каждой карточкой с учётом уже выбранных блюд дня. Промпт один на все приёмы, отличаются данные.</p>
+    <button class="btn ghost wide" id="sys-copy">Скопировать промпт и пример</button>`;
+  }
   if (pg === 'data') body = `<p class="hint">Все данные хранятся только на этом устройстве.</p><button class="btn ghost wide danger" id="st-wipe">Удалить все данные</button>`;
   v.innerHTML = `${appbar(title, 'Настройки', {back: true})}${body}`;
   v.querySelectorAll('[data-theme-set]').forEach(b => b.onclick = () => { S.theme = b.dataset.themeSet; save(); render(); });
@@ -633,6 +650,7 @@ function viewSettings() {
   v.querySelectorAll('[data-med]').forEach(b => b.onchange = () => { st.medical[b.dataset.med] = b.checked; save(); });
   on('#st-key', 'onchange', e => { st.apiKey = e.target.value.trim(); save(); });
   v.querySelectorAll('[data-addmark]').forEach(b => { const k = b.dataset.addmark, inp = $('#mk-' + k); const add = () => { const x = inp.value.trim(); if (x && !S.marks[k].includes(x)) { S.marks[k].push(x); save(); render(); } }; b.onclick = add; inp.onkeydown = e => { if (e.key === 'Enter') add(); }; });
+  on('#sys-copy', 'onclick', async () => { const t = Array.from(v.querySelectorAll('pre.code')).map(x => x.textContent).join('\n\n'); try { await navigator.clipboard.writeText(t); toast('Скопировано'); } catch (e) { toast('Не удалось скопировать'); } });
   on('#st-wipe', 'onclick', () => sheet(`<h3>Удалить все данные?</h3><p>Профили, рацион, пометки и ключ будут удалены с этого устройства.</p><div class="actions two"><button class="btn ghost" id="w-no">Отмена</button><button class="btn primary" id="w-yes">Удалить</button></div>`, b => { $('#w-no', b).onclick = closeSheet; $('#w-yes', b).onclick = () => { S = defaults(); save(); closeSheet(); render(); }; }));
 }
 function planShapeChanged() {
