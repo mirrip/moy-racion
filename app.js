@@ -44,15 +44,24 @@ function personTargets(p, goal) {
 const defaults = () => ({
   theme: 'dark', accent: 'gold', onboarded: false,
   people: [],
-  settings: {meals: 4, mealsAuto: false, planLen: 7, maxRepeat: 2, norms: 'NASEM', diet: 'all', forbidden: [], medical: {}, apiKey: '', apiUrl: '', apiModel: ''},
-  marks: {like: [], dislike: [], allergy: []},
-  collect: {budget: 6000, desired: [], homeOn: false, home: [], diff: ['1-3','3-7'], maxTime: 0, cook2: false, cuisine: ''},
+  settings: {meals: 4, mealsAuto: false, planLen: 7, norms: 'NASEM', diet: 'all', forbidden: [], allergens: [], medical: {}, apiKey: '', accessKey: '', serverUrl: '', botUrl: ''},
+  marks: {like: [], notes: {}},
+  collect: {budget: 6000, section: 1, cuisine: '', homeOn: false, home: [], cook2: false},
+  lib: {}, banned: {ids: [], names: []}, cool: {}, seenEver: [], dishStore: {}, imports: [], taste: {w: {}, mode: 'self', done: false}, aiTimes: [], firstCollect: null,
   plan: null, feed: null, lastWeek: null,
   shop: {checked: {}, group: false, range: 'all'},
   ui: {tab: 'plan', day: 0, open: {}, set: null}
 });
 let S;
 try { S = Object.assign(defaults(), JSON.parse(localStorage.getItem(KEY) || '{}')); } catch (e) { S = defaults(); }
+(function migrate() { // переход со старых версий: недостающие поля, старые пометки
+  const d = defaults();
+  ['settings', 'collect', 'marks', 'banned', 'taste', 'shop', 'ui'].forEach(k => { S[k] = Object.assign({}, d[k], S[k] || {}); });
+  if (Array.isArray(S.marks.allergy) && S.marks.allergy.length) { S.settings.forbidden = [...new Set([...S.settings.forbidden, ...S.marks.allergy])]; }
+  delete S.marks.allergy; delete S.marks.dislike;
+  if (typeof S.collect.section !== 'number') S.collect.section = 1;
+  if (S.feed && S.feed.seen && !S.feed.v4) S.feed = null;
+})();
 const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} };
 
 /* ---------- Даты ---------- */
@@ -86,18 +95,30 @@ function nut(dish, factor = 1) {
   t.na += (dish.salt || 0) * factor * 390;
   return t;
 }
+/* ---------- Справочники v4: кухни, разделы сложности, аллергены ---------- */
+const CUISINES = ['Русская', 'Средиземноморская', 'Европейская', 'Азиатская', 'Восточная'];
+const SECTIONS = [['Простое', 'до 15 мин'], ['Среднее', 'до 30 мин'], ['Сложное', 'до часа'], ['Шедевр', 'любое время']];
+const sectionOf = d => d.time <= 15 && d.diff <= 2 ? 0 : d.time <= 30 && d.diff <= 5 ? 1 : d.time <= 60 && d.diff <= 7 ? 2 : 3;
+const ALLERGENS = [['milk', 'Молоко (белок)'], ['lactose', 'Лактоза'], ['eggs', 'Яйца'], ['nuts', 'Орехи'], ['peanut', 'Арахис'], ['fish', 'Рыба'], ['seafood', 'Морепродукты'], ['gluten', 'Глютен'], ['soy', 'Соя'], ['sesame', 'Кунжут'], ['citrus', 'Цитрусы']];
+const ALG_ING = {milk: ['cottage', 'yogurt', 'kefir', 'milk', 'cheese', 'sourcream', 'butter'], lactose: ['cottage', 'yogurt', 'kefir', 'milk', 'sourcream'], eggs: ['eggs'], nuts: ['walnuts', 'almonds'], fish: ['salmon', 'mackerel', 'cod', 'tuna'], gluten: ['oat', 'bulgur', 'pasta', 'bread', 'lavash'], soy: ['tofu'], citrus: ['lemon', 'orange']};
+const ALG_RX = {milk: /молок|творог|йогурт|кефир|сыр|сметан|сливк|сливочн/i, lactose: /молок|творог|йогурт|кефир|сметан|сливк/i, eggs: /яйц|яич/i, nuts: /орех|миндал|фундук|кешью|фисташ|пекан/i, peanut: /арахис/i,
+  fish: /рыб|лосос|сёмг|семг|скумбр|треск|тунец|судак|минтай|сельд|форел|горбуш/i, seafood: /кревет|кальмар|мидии|краб|морепрод|гребеш/i, gluten: /пшен|мука|хлеб|макарон|паста|булгур|лаваш|манк|ячмен|ржан|овсян|кускус/i,
+  soy: /соя|соев|тофу/i, sesame: /кунжут|тахин/i, citrus: /лимон|апельсин|мандарин|грейпфрут|лайм/i};
+const hasAllergen = (d, a) => d.ing.some(i => (ALG_ING[a] || []).includes(i.id) || ALG_RX[a].test(i.name));
+const nameKey = s => String(s || '').toLowerCase().replace(/ё/g, 'е').replace(/[^а-яa-z0-9]/g, '');
+const isBanned = d => S.banned.ids.includes(d.id) || S.banned.names.includes(nameKey(d.name));
 const dishFlags = d => d.ing.map(i => i.flags || '').join('');
 function allowedByDiet(d) {
-  const fl = dishFlags(d), diet = S.settings.diet;
-  if (diet === 'veg' && /[mf]/.test(fl)) return false;
-  if (diet === 'vegan' && /[mfdeh]/.test(fl)) return false;
-  if (diet === 'pesc' && /m/.test(fl)) return false;
-  const bad = [...S.settings.forbidden, ...S.marks.allergy, ...S.marks.dislike].map(s => s.toLowerCase().trim()).filter(Boolean);
+  const fl = dishFlags(d), diet = S.settings.diet, txt = d.ing.map(i => i.name).join(' ');
+  if (diet === 'veg' && (/[mf]/.test(fl) || /куриц|говяд|свин|индейк|рыб/i.test(txt))) return false;
+  if (diet === 'vegan' && (/[mfdeh]/.test(fl) || /куриц|говяд|свин|индейк|рыб|молок|сыр|яйц|мёд/i.test(txt))) return false;
+  if (diet === 'pesc' && (/m/.test(fl) || /куриц|говяд|свин|индейк/i.test(txt))) return false;
+  if (diet === 'nopork' && /свин|бекон|ветчин|сало/i.test(txt)) return false;
+  if ((S.settings.allergens || []).some(a => hasAllergen(d, a))) return false;
+  const bad = S.settings.forbidden.map(s => s.toLowerCase().trim()).filter(Boolean);
   if (bad.some(b => d.name.toLowerCase().includes(b) || d.ing.some(i => i.name.toLowerCase().includes(b)))) return false;
-  if (S.marks.dislike.includes(d.name)) return false;
   return true;
 }
-const diffOk = d => { const r = S.collect.diff; if (!r.length) return true; return r.some(x => { const [a, b] = x.split('-').map(Number); return d.diff >= a && d.diff <= b; }); };
 
 /* ---------- План и цели семьи ---------- */
 function mealsCount() {
@@ -129,7 +150,7 @@ function rollWeek() {
   if (iso(new Date()) >= end) { S.lastWeek = S.plan; S.plan = null; S.feed = null; save(); }
 }
 
-/* ---------- Подбор блюда ---------- */
+/* ---------- Подбор блюда: цели приёма и здоровье ---------- */
 function slotTarget(day, slotIdx) {
   const fam = familyDay(), pat = pattern(), dd = S.plan.days[day];
   let eatenP = 0, eatenF = 0, eatenFib = 0, eatenE = 0, remP = 0;
@@ -143,66 +164,173 @@ function slotTarget(day, slotIdx) {
   const fib = Math.max(0, fam.fib - eatenFib) * (E / remE);
   return {E, P, F, C: Math.max(0, (E - 4 * P - 9 * F) / 4), fib};
 }
-function countUses(name) { let n = 0; S.plan.days.forEach(d => d.slots.forEach(s => { if (s && s.dish.name === name) n++; })); return n; }
+const allSlots = () => S.plan ? [].concat(...S.plan.days.map(d => d.slots)).filter(Boolean) : [];
+const usedInPlan = id => allSlots().some(s => s.dish.id === id && !s.leftover);
 function scoreDish(d, tg) {
   const n = nut(d), k = n.kcal || 1, te = tg.E || 1;
   let s = Math.abs(n.p * 4 / k - tg.P * 4 / te) * 3 + Math.abs(n.f * 9 / k - tg.F * 9 / te) * 1.5 + Math.abs(n.fib / k - tg.fib / te) * 400;
+  s -= (S.taste.w[d.cuisine] || 0) * 0.2;
   if (S.marks.like.includes(d.name)) s -= 0.08;
-  if (S.collect.cuisine && d.cuisine !== S.collect.cuisine) s += 0.1;
   if (d.rare) s += 0.15;
-  return s + Math.random() * 0.12;
+  return s + Math.random() * 0.1;
 }
-function nearPenalty(name, day) { let s = 0; [[day, 2], [day - 1, 1], [day + 1, 1]].forEach(([d, w]) => { const dd = S.plan.days[d]; if (dd && dd.slots.some(x => x && x.dish.name === name)) s += w; }); return s; }
-function candidates(day, slotIdx, seenNames) {
-  const type = pattern()[slotIdx][0], maxT = +S.collect.maxTime || 0;
-  return DISHES.map(resolveDish).filter(d => d.types.includes(type) && allowedByDiet(d) && diffOk(d) && (!maxT || d.time <= maxT)
-    && countUses(d.name) < (d.rare ? 1 : S.settings.maxRepeat) && !seenNames.includes(d.name));
+/* Норма приёма (уровень 1 фильтра здоровья): натрий и белок на всю семью после подгонки порций */
+function healthOk(d, slotIdx, tg) {
+  const type = pattern()[slotIdx][0], n = nut(d, famFactor(d, slotIdx)), ppl = S.people.length;
+  if (n.na > (type === 's' ? 300 : 800) * ppl * 1.25) return false;
+  if (type !== 's' && n.p < tg.P * 0.45) return false;
+  return true;
 }
-function desiredFor(slotIdx, seenNames) {
-  const type = pattern()[slotIdx][0];
-  for (const w of S.collect.desired) {
-    const q = w.toLowerCase();
-    if ([].concat(...S.plan.days.map(d => d.slots)).some(s => s && s.fromDesired && s.dish.name.toLowerCase().includes(q))) continue;
-    const m = DISHES.map(resolveDish).find(d => d.name.toLowerCase().includes(q) && d.types.includes(type) && !seenNames.includes(d.name) && allowedByDiet(d));
-    if (m) return m;
+/* ---------- Бюджет по приёмам ---------- */
+const BUDGET_SHARE = {3: {b: 28, l: 44, d: 28}, 4: {b: 25, l: 40, s: 10, d: 25}, 5: {b: 25, l: 40, s: 5, d: 25}};
+function slotBudget(slotIdx) { const t = pattern()[slotIdx][0]; return (+S.collect.budget || 0) / S.plan.len * (BUDGET_SHARE[S.plan.meals][t] || 10) / 100; }
+function budgetPenalty(d, slotIdx) {
+  const lim = slotBudget(slotIdx); if (!lim) return 0;
+  const p = nut(d, famFactor(d, slotIdx)).price;
+  return p > lim * 1.6 ? 99 : p > lim * 1.15 ? 0.25 : 0;
+}
+
+/* ---------- Системы кругов: кухня × раздел сложности ---------- */
+const sysKey = (cuisine, sec) => (cuisine || 'any') + '|' + sec;
+const curSys = () => sysKey(S.collect.cuisine, S.collect.section);
+function lib(sys, type) { S.lib[sys] = S.lib[sys] || {}; return (S.lib[sys][type] = S.lib[sys][type] || {main: [], sec: []}); }
+function capacity(type) { const pat = pattern(); return pat.filter(m => m[0] === type).length * (S.plan ? S.plan.len : S.settings.planLen) * 4; }
+const SEC_CAP = 10;
+const DBMAP = {}; DISHES.forEach(d => { DBMAP[d.id] = resolveDish(d); });
+const getDish = id => DBMAP[id] || S.dishStore[id] || null;
+function rememberDish(d) { if (!DBMAP[d.id]) S.dishStore[d.id] = d; }
+function libTake(d, type) {
+  const sec = sectionOf(d), systems = [...new Set([sysKey(d.cuisine && CUISINES.includes(d.cuisine) ? d.cuisine : S.collect.cuisine, sec), sysKey('', sec), curSys()])];
+  systems.forEach(k => { const L = lib(k, type); L.main = L.main.filter(x => x !== d.id); L.sec = L.sec.filter(x => x !== d.id); L.main.push(d.id); while (L.main.length > capacity(type)) L.main.shift(); });
+  rememberDish(d);
+}
+function libRefuse(d, type) { // первый отказ: основной круг → вторичный; второй — удаление навсегда
+  const all = Object.values(S.lib).map(sys => sys[type]).filter(Boolean);
+  if (all.some(L => L.main.includes(d.id))) { // во всех системах, где блюдо в основном круге, — во вторичный
+    all.forEach(L => { if (L.main.includes(d.id)) { L.main = L.main.filter(x => x !== d.id); L.sec.push(d.id); while (L.sec.length > SEC_CAP) L.sec.shift(); } });
+    return 'sec';
   }
-  return null;
+  if (all.some(L => L.sec.includes(d.id))) { ban(d); return 'ban'; }
+  S.cool[d.id] = Date.now() + 28 * 864e5; return 'cool';
 }
-const SYSTEM_PROMPT = 'Ты подбираешь одно блюдо для семейного рациона. Отвечай только JSON без пояснений: {"name":str,"time":мин,"diff":1-10,"cuisine":str,"steps":[str],"ingredients":[{"name":str,"g":граммы на одну базовую порцию,"kcal":на100г,"p":,"f":,"c":,"fib":,"cat":"Овощи и фрукты|Крупы и хлеб|Мясо и рыба|Молочное и яйца|Бобовые и орехи|Масла и соусы","price":руб за кг}]}. Соблюдай целевые доли белка, жира, углеводов и клетчатки приёма, ограничения диеты и запреты. Добавленный сахар не более 10 г на приём, соль не более 2 г на порцию, без трансжиров и колбас.';
+function ban(d) {
+  if (!S.banned.ids.includes(d.id)) S.banned.ids.push(d.id);
+  const k = nameKey(d.name); if (!S.banned.names.includes(k)) S.banned.names.push(k);
+  Object.values(S.lib).forEach(sys => Object.values(sys).forEach(L => { L.main = L.main.filter(x => x !== d.id); L.sec = L.sec.filter(x => x !== d.id); }));
+  rememberDish(d);
+}
+function unban(id) { const d = getDish(id); S.banned.ids = S.banned.ids.filter(x => x !== id); if (d) S.banned.names = S.banned.names.filter(x => x !== nameKey(d.name)); }
+
+/* ---------- Подбор одной карточки ---------- */
+function fitsSlot(d, ctx, relaxed) {
+  if (!d || !d.types.includes(ctx.type) || isBanned(d) || !allowedByDiet(d)) return false;
+  if (usedInPlan(d.id) || ctx.seen.has(d.id)) return false;
+  if (relaxed !== 'section' && sectionOf(d) > S.collect.section) return false;
+  if ((!relaxed || relaxed === true) && S.collect.cuisine && d.cuisine !== S.collect.cuisine) return false;
+  if (budgetPenalty(d, ctx.slot) >= 99) return false;
+  return healthOk(d, ctx.slot, ctx.tg);
+}
+function homeBonus(d, day) {
+  if (!S.collect.homeOn || !S.collect.home.length || day > 1) return 0;
+  const h = S.collect.home.map(x => x.toLowerCase());
+  return d.ing.some(i => h.some(x => i.name.toLowerCase().includes(x) || x.includes(i.name.toLowerCase()))) ? -0.4 : 0;
+}
+const rank = (list, ctx) => list.map(d => [d, scoreDish(d, ctx.tg) + budgetPenalty(d, ctx.slot) + homeBonus(d, ctx.day)]).sort((a, b) => a[1] - b[1]).map(x => x[0]);
+function pickCircle(which, ctx) { const L = lib(curSys(), ctx.type); for (const id of L[which]) { const d = getDish(id); if (fitsSlot(d, ctx)) return d; } return null; }
+function pickNewLocal(ctx, relaxed) {
+  const now = Date.now(), seenEver = new Set(S.seenEver), L = lib(curSys(), ctx.type), inLib = new Set([...L.main, ...L.sec]);
+  const imp = S.imports.filter(x => x.share > 0);
+  if (imp.length && Math.random() * 100 < imp[0].share) {
+    const c = rank(imp[0].ids.map(getDish).filter(d => d && !inLib.has(d.id) && fitsSlot(d, ctx, true)), ctx); if (c[0]) return c[0];
+  }
+  const pool = [...Object.values(DBMAP), ...Object.values(S.dishStore).filter(d => d.src === 'server')].filter(d => !inLib.has(d.id) && !(S.cool[d.id] > now) && (relaxed || !seenEver.has(d.id)) && fitsSlot(d, ctx, relaxed));
+  return rank(pool, ctx)[0] || null;
+}
+async function pickNew(ctx) {
+  let d = pickNewLocal(ctx);
+  if (d) return d;
+  if (canRemote()) { try { d = await remoteDish('find', ctx) || await remoteDish('generate', ctx); if (d && fitsSlot(d, ctx, true)) return d; } catch (e) { noteRemoteError(e); } }
+  return pickNewLocal(ctx, true) || pickNewLocal(ctx, 'cuisine') || pickNewLocal(ctx, 'section');
+}
+async function nextCard() {
+  const F = S.feed, key = F.day + '-' + F.slot, t0 = performance.now();
+  F.seen[key] = F.seen[key] || [];
+  const ctx = {day: F.day, slot: F.slot, type: pattern()[F.slot][0], tg: slotTarget(F.day, F.slot), seen: new Set(F.seen[key])};
+  F.counter = (F.counter || 0) + 1;
+  let dish = null, src = 'new';
+  const hq = (F.homeQueue || []).findIndex(x => x.types.includes(ctx.type) && F.day <= 1 && !ctx.seen.has(x.id));
+  if (hq >= 0) { dish = F.homeQueue.splice(hq, 1)[0]; src = 'home'; }
+  else if (F.counter % 5 === 0) { dish = await pickNew(ctx); src = 'new'; }
+  else {
+    const L = lib(curSys(), ctx.type), full = L.main.length >= capacity(ctx.type);
+    const order = full ? ['main', 'main', 'main', 'sec'] : ['main', 'sec', 'new'];
+    const start = (F.rr = (F.rr || 0) + 1) % order.length;
+    const seq = [...order.slice(start), ...order.slice(0, start), 'main', 'sec', 'new'];
+    for (const s of seq) { dish = s === 'new' ? await pickNew(ctx) : pickCircle(s, ctx); if (dish) { src = s; break; } }
+  }
+  await uniformDelay(t0);
+  F.card = dish ? {dish, src} : null;
+  if (dish) { F.seen[key].push(dish.id); rememberDish(dish); }
+  save();
+}
+
+/* ---------- Одинаковая скорость карточек ---------- */
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+function cardDelay() { const a = (S.aiTimes || []).slice(-20).sort((x, y) => x - y); const m = a.length ? a[a.length >> 1] : 1500; return Math.min(5000, Math.max(700, m)); }
+async function uniformDelay(t0) { const w = cardDelay() + (Math.random() - 0.5) * 500 - (performance.now() - t0); if (w > 0) await sleep(w); }
+
+/* ---------- Нейросеть и сервер ---------- */
 const GEMINI_MODELS = ['gemini-flash-latest', 'gemini-2.5-flash'];
-async function aiDish(day, slotIdx, tg, seenNames) {
-  const st = S.settings; if (!st.apiKey) return null;
-  const pat = pattern()[slotIdx];
-  const ctx = {meal: pat[1], people: S.people.length, target_family: {kcal: r0(tg.E), protein_g: r0(tg.P), fat_g: r0(tg.F), carbs_g: r0(tg.C), fiber_g: r0(tg.fib)},
-    diet: st.diet, forbidden: [...st.forbidden, ...S.marks.allergy], dislike: S.marks.dislike, liked: S.marks.like, not_these: seenNames, desired: S.collect.desired,
-    difficulty: S.collect.diff, max_time_min: +S.collect.maxTime || null, cuisine: S.collect.cuisine || null, home_products: S.collect.homeOn ? S.collect.home : []};
+function systemPrompt() {
+  const w = S.taste.w, like = Object.keys(w).filter(k => w[k] > 0.1), dis = Object.keys(w).filter(k => w[k] < -0.1);
+  const alg = (S.settings.allergens || []).map(a => ALLERGENS.find(x => x[0] === a)[1]);
+  return 'Ты подбираешь одно домашнее блюдо для семейного рациона. Отвечай только JSON без пояснений: {"name":str,"time":мин,"diff":1-10,"cuisine":str,"steps":[до 5 шагов],"ingredients":[{"name":str,"g":граммы на одну базовую порцию,"kcal":на100г,"p":,"f":,"c":,"fib":,"cat":"Овощи и фрукты|Крупы и хлеб|Мясо и рыба|Молочное и яйца|Бобовые и орехи|Масла и соусы","price":руб за кг}]}. '
+    + 'Соблюдай цели приёма по белку, жирам, углеводам и клетчатке. Добавленный сахар не более 10 г на приём, соль не более 2 г на порцию, без трансжиров, колбас и сосисок. '
+    + (alg.length ? 'Аллергии в семье (исключить полностью): ' + alg.join(', ') + '. ' : '')
+    + (S.settings.forbidden.length ? 'Не использовать: ' + S.settings.forbidden.join(', ') + '. ' : '')
+    + (like.length ? 'Семья любит: ' + like.join(', ') + '. ' : '') + (dis.length ? 'Не любит: ' + dis.join(', ') + '. ' : '')
+    + (S.collect.homeOn && S.collect.home.length ? 'Дома есть: ' + S.collect.home.join(', ') + '.' : '');
+}
+function requestBody(ctx, extra = {}) {
+  const pat = pattern()[ctx.slot], tg = ctx.tg;
+  return Object.assign({meal: pat[1], type: pat[0], people: S.people.length, target_family: {kcal: r0(tg.E), protein_g: r0(tg.P), fat_g: r0(tg.F), carbs_g: r0(tg.C), fiber_g: r0(tg.fib)},
+    diet: S.settings.diet, cuisine: S.collect.cuisine || null, section: SECTIONS[S.collect.section][0] + ' (' + SECTIONS[S.collect.section][1] + ')', budget_rub: r0(slotBudget(ctx.slot))}, extra);
+}
+const canRemote = () => !!(S.settings.serverUrl || S.settings.apiKey);
+function noteRemoteError(e) { const F = S.feed; if (F && !F.aiWarned) { F.aiWarned = true; toast('Нейросеть недоступна: ' + e.message + '. Беру блюда из базы.'); } }
+function normalizeDish(o, type) {
+  if (!o || !o.name || !Array.isArray(o.ingredients || o.ing) || !(o.ingredients || o.ing).length) throw new Error('Неполный ответ');
+  const id = 'ai' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  return {id, name: String(o.name), types: o.types || type, time: +o.time || 30, diff: Math.min(10, Math.max(1, +o.diff || 3)), cuisine: o.cuisine || S.collect.cuisine || '', steps: (o.steps || []).map(String).slice(0, 6), salt: 1, src: 'ai',
+    ing: (o.ingredients || o.ing).map((x, i) => ({id: 'x' + i + '_' + nameKey(x.name), name: String(x.name), cat: x.cat || 'Прочее', g: +x.g || 0, kcal: +x.kcal || 0, p: +x.p || 0, f: +x.f || 0, c: +x.c || 0, fib: +x.fib || 0, price: +x.price || 300, flags: '', unit: 'g'}))};
+}
+async function remoteDish(kind, ctx, extra) {
+  const st = S.settings, type = pattern()[ctx.slot][0], t0 = performance.now();
+  if (st.serverUrl) {
+    const r = await fetch(st.serverUrl.replace(/\/$/, '') + '/dish/' + kind, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({key: st.accessKey, seen: S.seenEver.slice(-300), banned: S.banned.names, allergens: st.allergens || [], req: requestBody(ctx, extra), system: systemPrompt()})});
+    if (!r.ok) throw new Error('сервер ' + r.status);
+    const j = await r.json(); if (!j.dish) return null;
+    if (kind === 'generate') S.aiTimes.push(performance.now() - t0);
+    const nd = normalizeDish(j.dish, type); if (j.dish.id) { nd.id = j.dish.id; nd.src = 'server'; } return nd;
+  }
+  if (kind !== 'generate' || !st.apiKey) return null;
   let lastErr;
   for (const model of GEMINI_MODELS) {
     const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(st.apiKey)}`, {method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({systemInstruction: {parts: [{text: SYSTEM_PROMPT}]}, contents: [{role: 'user', parts: [{text: JSON.stringify(ctx)}]}], generationConfig: {temperature: 0.9, responseMimeType: 'application/json'}})});
-    if (res.status === 404) { lastErr = new Error('Модель не найдена'); continue; }
-    if (!res.ok) throw new Error('Сервер ответил ' + res.status);
+      body: JSON.stringify({systemInstruction: {parts: [{text: systemPrompt()}]}, contents: [{role: 'user', parts: [{text: JSON.stringify(requestBody(ctx, extra))}]}], generationConfig: {temperature: 0.9, responseMimeType: 'application/json'}})});
+    if (res.status === 404) { lastErr = new Error('модель не найдена'); continue; }
+    if (!res.ok) throw new Error('ответ ' + res.status);
     const j = await res.json(); const txt = j.candidates && j.candidates[0] && j.candidates[0].content.parts.map(p => p.text || '').join('');
-    const o = JSON.parse(String(txt).replace(/^```json|```$/g, '').trim());
-    if (!o.name || !Array.isArray(o.ingredients) || !o.ingredients.length) throw new Error('Неполный ответ');
-    return {id: 'ai' + Date.now(), name: String(o.name), types: pat[0], time: +o.time || 30, diff: Math.min(10, Math.max(1, +o.diff || 3)), cuisine: o.cuisine || '', steps: (o.steps || []).map(String), salt: 1, src: 'ai',
-      ing: o.ingredients.map((x, i) => ({id: 'ai' + i + '_' + String(x.name).toLowerCase(), name: String(x.name), cat: x.cat || 'Прочее', g: +x.g || 0, kcal: +x.kcal || 0, p: +x.p || 0, f: +x.f || 0, c: +x.c || 0, fib: +x.fib || 0, price: +x.price || 300, flags: '', unit: 'g'}))};
+    S.aiTimes.push(performance.now() - t0); S.aiTimes = S.aiTimes.slice(-20);
+    return normalizeDish(JSON.parse(String(txt).replace(/^```json|```$/g, '').trim()), type);
   }
-  throw lastErr || new Error('Нет ответа');
+  throw lastErr || new Error('нет ответа');
 }
-async function nextCard() {
-  const F = S.feed, key = F.day + '-' + F.slot;
-  F.seen[key] = F.seen[key] || [];
-  const seenNames = F.seen[key].map(d => d.name);
-  const tg = slotTarget(F.day, F.slot);
-  let dish = desiredFor(F.slot, seenNames), desired = !!dish;
-  if (!dish) {
-    try { dish = await aiDish(F.day, F.slot, tg, seenNames); } catch (e) { if (!F.aiWarned) { toast('Нейросеть недоступна: ' + e.message + '. Беру блюда из базы.'); F.aiWarned = true; } }
-    if (!dish) { const c = candidates(F.day, F.slot, seenNames).map(d => [d, scoreDish(d, tg) + nearPenalty(d.name, F.day)]).sort((a, b) => a[1] - b[1]).map(x => x[0]); dish = c[0] || null; }
-  }
-  F.card = dish ? {dish, desired} : null;
-  if (dish) F.seen[key].push(dish);
-  save();
+async function verifyAccess() { // одна проверка подписки при «Собрать рацион»
+  const st = S.settings; if (!st.serverUrl) return {ok: true, demo: true};
+  if (!st.accessKey) return {ok: false, reason: 'nokey'};
+  try { const r = await fetch(st.serverUrl.replace(/\/$/, '') + '/verify', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({key: st.accessKey})}); const j = await r.json(); return j.active ? {ok: true, until: j.until} : {ok: false, reason: j.reason || 'expired'}; }
+  catch (e) { return {ok: false, reason: 'net'}; }
 }
 
 /* ---------- UI: общие ---------- */
@@ -292,7 +420,7 @@ function viewPlan() {
   const gc = $('#go-collect'); if (gc) gc.onclick = () => { S.ui.tab = 'collect'; save(); render(); };
   v.querySelectorAll('[data-open]').forEach(b => b.onclick = () => { const k = b.dataset.open; S.ui.open[k] = !S.ui.open[k]; save(); render(); });
   v.querySelectorAll('[data-status]').forEach(b => b.onclick = () => { const [d, i, st] = b.dataset.status.split(':'); const sl = S.plan.days[d].slots[i]; sl.status = sl.status === st ? null : st; save(); render(); });
-  v.querySelectorAll('[data-replace]').forEach(b => b.onclick = () => { const [d, i] = b.dataset.replace.split(':').map(Number); startFeed(d, i, true); });
+  v.querySelectorAll('[data-replace]').forEach(b => b.onclick = () => { const [d, i] = b.dataset.replace.split(':').map(Number); replaceSlot(d, i); });
   v.querySelectorAll('[data-more]').forEach(b => b.onclick = () => { const [d, i] = b.dataset.more.split(':').map(Number); dishDetails(d, i); });
   v.querySelectorAll('[data-portions]').forEach(b => b.onclick = () => { const [d, i] = b.dataset.portions.split(':').map(Number); portionSheet(d, i); });
 }
@@ -319,6 +447,16 @@ function mealCard(day, i, m) {
      ${day <= ti ? `<div class="actions two"><button class="btn${sl.status === 'eaten' ? ' primary' : ' ghost'}" data-status="${day}:${i}:eaten">Съедено</button><button class="btn${sl.status === 'skipped' ? ' primary' : ' ghost'}" data-status="${day}:${i}:skipped">Пропущено</button></div>` : ''}
    </div>` : ''}
   </article>`;
+}
+function replaceSlot(day, i) {
+  const sl = S.plan.days[day].slots[i];
+  if (!sl) { startFeed(day, i, true); return; }
+  const d = sl.dish, type = pattern()[i][0];
+  sheet(`<p class="eyebrow">Замена блюда</p><h3>${esc(d.name)}</h3><p class="hint">Почему меняем? От этого зависит, вернётся ли блюдо в ваши круги.</p>
+   <div class="actions"><button class="btn ghost" id="rp-today">Не сегодня</button><button class="btn ghost" id="rp-dis">Не нравится — убрать навсегда</button></div>`, b => {
+    const go = hard => { if (hard) ban(d); else libRefuse(d, type); S.plan.days[day].slots[i] = null; if (sl.leftover === undefined && S.plan.days[day + 1] && S.plan.days[day + 1].slots[i] && S.plan.days[day + 1].slots[i].leftover && S.plan.days[day + 1].slots[i].dish.id === d.id) S.plan.days[day + 1].slots[i] = null; save(); closeSheet(); startFeed(day, i, true); };
+    $('#rp-today', b).onclick = () => go(false); $('#rp-dis', b).onclick = () => go(true);
+  });
 }
 function fmtAmt(i, g) {
   if (i.unit === 'pcs') return Math.max(1, Math.round(g / 55)) + ' шт';
@@ -369,88 +507,139 @@ function viewCollect() {
   const per = st.planLen === 7 ? 'неделю' : '3 дня';
   const started = S.plan && S.plan.days.some(d => d.slots.some(Boolean));
   const chipsList = (arr, attr) => arr.length ? `<div class="chips">${arr.map((w, i) => `<button class="chip x" data-${attr}="${i}">${esc(w)}</button>`).join('')}</div>` : '';
+  const pat = PATTERNS[S.plan ? S.plan.meals : mealsCount()], len = S.plan ? S.plan.len : st.planLen, start = S.plan ? S.plan.start : cycleStart(len);
+  const dayOpts = Array.from({length: len}, (_, i) => { const dt = new Date(addDays(start, i) + 'T12:00:00'); return `<option value="${i}">${DOW[dt.getDay()]}, ${dt.getDate()} ${MON[dt.getMonth()]}</option>`; }).join('');
+  const wishes = allSlots().filter(s => s.fromDesired && !s.leftover);
+  const sys = S.plan ? libSummary() : '';
   $('#view').innerHTML = `${appbar('Сбор рациона', st.planLen === 7 ? 'Неделя со вторника' : 'Рацион на 3 дня')}
   ${med ? '<div class="warn box">Отмечено состояние здоровья, при котором автоматический рацион не подходит. Составьте питание вместе с врачом.</div>' : ''}
   <div class="panel">
    <label class="field"><span><em>Бюджет на ${per}, ₽</em><input id="c-budget" type="number" inputmode="numeric" min="0" step="100" value="${c.budget}"></span></label>
-   <details class="field col"${c.extraOpen ? ' open' : ''} id="c-extra"><summary>Дополнительно</summary>
-     <div class="sub-block"><em>Сложность блюд</em><div class="chips">${[['1-3','Просто · 1–3'],['3-7','Средне · 3–7'],['7-10','Шедевр · 7–10']].map(([r, t]) => `<button class="chip${c.diff.includes(r) ? ' on' : ''}" data-diff="${r}">${t}</button>`).join('')}</div></div>
-     <div class="sub-block"><em>Время готовки одного блюда</em><div class="chips">${[[0,'Любое'],[15,'До 15 мин'],[30,'До 30 мин'],[60,'До часа']].map(([v, t]) => `<button class="chip${+c.maxTime === v ? ' on' : ''}" data-time="${v}">${t}</button>`).join('')}</div></div>
-   </details>
+   <div class="field col"><em>Сложность</em><div class="chips">${SECTIONS.map(([t, s], i) => `<button class="chip${c.section === i ? ' on' : ''}" data-sec="${i}">${t} · ${s}</button>`).join('')}</div></div>
+   <div class="field col"><em>Кухня</em><div class="chips">${['', ...CUISINES].map(x => `<button class="chip${c.cuisine === x ? ' on' : ''}" data-cuisine="${x}">${x || 'Любая'}</button>`).join('')}</div></div>
   </div>
   <div class="panel gap">
-   <div class="field col"><em>Желаемые блюда</em><div class="chipin"><input id="c-desired" placeholder="Например, борщ" enterkeyhint="done"><button class="btn ghost sm" id="c-desired-add">Добавить</button></div>${chipsList(c.desired, 'rmdes')}</div>
-   <div class="field switch">${ic('shop')}<span><em>Есть продукты дома</em><small>Их не будет в списке покупок</small></span><button class="tog${c.homeOn ? ' on' : ''}" id="c-home-tog" role="switch" aria-checked="${c.homeOn}" aria-label="Есть продукты дома"><i></i></button></div>
+   <div class="field col"><em>Желаемое блюдо</em>
+     <input id="c-wish" placeholder="Например, борщ" enterkeyhint="done">
+     <div class="row2"><select id="c-wish-day" aria-label="День">${dayOpts}</select><select id="c-wish-slot" aria-label="Приём">${pat.map((m, i) => `<option value="${i}">${m[1]}</option>`).join('')}</select></div>
+     <button class="btn ghost" id="c-wish-add">Поставить в рацион</button>
+     ${wishes.length ? `<div class="chips">${wishes.map(s => `<span class="chip">${esc(s.dish.name)}</span>`).join('')}</div>` : ''}
+     <small>Если блюда нет в базе, его составит нейросеть.</small></div>
+   <div class="field switch">${ic('shop')}<span><em>Есть продукты дома</em><small>Блюда из них — в ближайшие дни, в покупках их не будет</small></span><button class="tog${c.homeOn ? ' on' : ''}" id="c-home-tog" role="switch" aria-checked="${c.homeOn}" aria-label="Есть продукты дома"><i></i></button></div>
    ${c.homeOn ? `<div class="field col"><div class="chipin"><input id="c-home" placeholder="Например, гречка" enterkeyhint="done"><button class="btn ghost sm" id="c-home-add">Добавить</button></div>${chipsList(c.home, 'rmhome')}</div>` : ''}
    <div class="field switch">${ic('dish')}<span><em>Готовить на 2 дня</em><small>Обед и ужин — одной готовкой</small></span><button class="tog${c.cook2 ? ' on' : ''}" id="c-cook2" role="switch" aria-checked="${c.cook2}" aria-label="Готовить на 2 дня"><i></i></button></div>
-   <details class="field col"${c.moreOpen || c.cuisine ? ' open' : ''} id="c-more"><summary>Ещё параметры</summary>
-     <div class="sub-block"><em>Кухня</em><div class="chips">${['','Русская','Средиземноморская','Европейская','Азиатская','Восточная'].map(x => `<button class="chip${c.cuisine === x ? ' on' : ''}" data-cuisine="${x}">${x || 'Любая'}</button>`).join('')}</div></div>
-   </details>
   </div>
+  ${sys}
   ${S.plan ? '<button class="btn ghost wide reset" id="c-reset">Начать неделю заново</button>' : ''}
   <div class="cta"><button class="btn primary wide big" id="c-go"${med ? ' disabled' : ''}>${ic('collect')}<span>${started ? 'Продолжить сбор' : 'Собрать рацион'}</span></button></div>`;
   const bindList = (inp, btn, arr) => { const add = () => { const x = $(inp).value.trim(); if (!x) return; arr.push(x); save(); render(); }; $(btn).onclick = add; $(inp).onkeydown = e => { if (e.key === 'Enter') add(); }; };
-  bindList('#c-desired', '#c-desired-add', c.desired);
-  document.querySelectorAll('[data-rmdes]').forEach(b => b.onclick = () => { c.desired.splice(+b.dataset.rmdes, 1); save(); render(); });
   $('#c-home-tog').onclick = () => { c.homeOn = !c.homeOn; save(); render(); };
   if (c.homeOn) { bindList('#c-home', '#c-home-add', c.home); document.querySelectorAll('[data-rmhome]').forEach(b => b.onclick = () => { c.home.splice(+b.dataset.rmhome, 1); save(); render(); }); }
-  document.querySelectorAll('[data-diff]').forEach(b => b.onclick = () => { const r = b.dataset.diff, k = c.diff.indexOf(r); k < 0 ? c.diff.push(r) : c.diff.splice(k, 1); save(); render(); });
-  document.querySelectorAll('[data-time]').forEach(b => b.onclick = () => { c.maxTime = +b.dataset.time; save(); render(); });
+  document.querySelectorAll('[data-sec]').forEach(b => b.onclick = () => { c.section = +b.dataset.sec; save(); render(); });
   document.querySelectorAll('[data-cuisine]').forEach(b => b.onclick = () => { c.cuisine = b.dataset.cuisine; save(); render(); });
-  $('#c-extra').ontoggle = e => { c.extraOpen = e.target.open; save(); };
-  $('#c-more').ontoggle = e => { c.moreOpen = e.target.open; save(); };
   $('#c-budget').onchange = e => { c.budget = +e.target.value || 0; save(); };
   $('#c-cook2').onclick = () => { c.cook2 = !c.cook2; save(); render(); };
-  $('#c-go').onclick = () => {
-    if (!S.plan) newPlan();
-    const first = firstEmpty();
-    if (!first) { S.ui.tab = 'plan'; save(); render(); toast('Рацион уже собран. Заменить блюдо можно в разделе «Рацион».'); return; }
-    keyDialog(() => startFeed(first[0], first[1], false));
-  };
-  const rs = $('#c-reset'); if (rs) rs.onclick = () => sheet(`<h3>Начать неделю заново?</h3><p>Все выбранные блюда этой недели будут удалены.</p><div class="actions two"><button class="btn ghost" id="rs-no">Отмена</button><button class="btn primary" id="rs-yes">Удалить и начать</button></div>`, b => { $('#rs-no', b).onclick = closeSheet; $('#rs-yes', b).onclick = () => { S.plan = null; S.feed = null; save(); closeSheet(); render(); }; });
+  $('#c-wish-add').onclick = () => addDesired($('#c-wish').value.trim(), +$('#c-wish-day').value, +$('#c-wish-slot').value);
+  $('#c-go').onclick = startCollect;
+  const rs = $('#c-reset'); if (rs) rs.onclick = () => sheet(`<h3>Начать неделю заново?</h3><p>Все выбранные блюда этой недели будут удалены. Ваши круги блюд сохранятся.</p><div class="actions two"><button class="btn ghost" id="rs-no">Отмена</button><button class="btn primary" id="rs-yes">Удалить и начать</button></div>`, b => { $('#rs-no', b).onclick = closeSheet; $('#rs-yes', b).onclick = () => { S.plan = null; S.feed = null; save(); closeSheet(); render(); }; });
 }
-function keyDialog(go) {
+function libSummary() {
+  const pat = pattern(), types = [...new Set(pat.map(m => m[0]))], names = {b: 'Завтраки', l: 'Обеды', d: 'Ужины', s: 'Перекусы'};
+  return `<details class="panel libsum"><summary>Ваши круги · ${esc(S.collect.cuisine || 'любая кухня')} · ${SECTIONS[S.collect.section][0].toLowerCase()}</summary><ul class="ing">${types.map(t => { const L = lib(curSys(), t); return `<li><span>${names[t]}</span><b>${L.main.length} из ${capacity(t)} · вторичный ${L.sec.length}</b></li>`; }).join('')}</ul><p class="hint">Основной круг — блюда за 4 недели. Отказ переносит блюдо во вторичный круг, второй отказ удаляет навсегда.</p></details>`;
+}
+async function addDesired(name, day, slot) {
+  if (!name) { toast('Впишите название блюда'); return; }
+  if (!S.plan) newPlan();
+  const ctx = {day, slot, type: pattern()[slot][0], tg: slotTarget(day, slot), seen: new Set()};
+  const q = nameKey(name);
+  let d = Object.values(DBMAP).find(x => nameKey(x.name).includes(q) && allowedByDiet(x) && !isBanned(x));
+  if (!d && canRemote()) {
+    toast('Составляю блюдо…');
+    try { d = await remoteDish('generate', ctx, {wish: name}); } catch (e) { toast('Нейросеть недоступна: ' + e.message); return; }
+  }
+  if (!d) { toast('Такого блюда нет в базе. Чтобы его составила нейросеть, нужен ключ доступа.'); return; }
+  if (!allowedByDiet(d)) { toast('В блюде есть то, что в семье исключено'); return; }
+  S.plan.days[day].slots[slot] = {dish: d, status: null, fromDesired: true};
+  libTake(d, ctx.type); S.seenEver.push(d.id); save(); render();
+  toast(healthOk(d, slot, ctx.tg) ? `«${d.name}» в рационе` : `«${d.name}» в рационе. Блюдо не вписывается в нормы приёма — остальные приёмы дня подстроятся.`);
+}
+async function startCollect() {
+  if (!S.plan) newPlan();
+  const first = firstEmpty();
+  if (!first) { S.ui.tab = 'plan'; save(); render(); toast('Рацион уже собран. Заменить блюдо можно в разделе «Рацион».'); return; }
   const st = S.settings;
-  sheet(`<div class="keyhead"><span class="medal big">${ic('key')}</span><div><p class="eyebrow">Перед подбором</p><h3>Ключ доступа</h3></div></div>
-   <p class="hint">Ключ подключает нейросеть, которая подбирает блюда под нормы вашей семьи. Без ключа приложение работает в демо-режиме на встроенной базе блюд.</p>
-   <input id="k-key" type="password" autocomplete="off" value="${esc(st.apiKey)}" placeholder="Вставьте ключ">
-   <div class="actions two"><button class="btn ghost" id="k-demo">Демо без ключа</button><button class="btn primary" id="k-go">Начать подбор</button></div>`, b => {
-    $('#k-demo', b).onclick = () => { st.apiKey = ''; save(); closeSheet(); go(); };
-    $('#k-go', b).onclick = () => { st.apiKey = $('#k-key', b).value.trim(); save(); closeSheet(); if (!st.apiKey) toast('Ключ не введён — включён демо-режим'); go(); };
+  if (st.serverUrl) {
+    const v = await verifyAccess();
+    if (!v.ok) { accessSheet(v.reason, () => startCollect()); return; }
+  }
+  S.firstCollect = S.firstCollect || iso(new Date());
+  startFeed(first[0], first[1], false);
+}
+function accessSheet(reason, retry) {
+  const st = S.settings, bot = st.botUrl || 'https://t.me/';
+  const txt = {nokey: ['Ключ доступа', 'Введите ключ, который выдал Telegram-бот после оплаты.'], expired: ['Подписка закончилась', 'Продлите подписку в Telegram-боте — собранная неделя остаётся доступной.'], notfound: ['Ключ не найден', 'Проверьте ключ или получите новый в Telegram-боте.'], net: ['Нужен интернет', 'Для начала сбора нужна сеть: проверяется подписка.']}[reason] || ['Нет доступа', 'Проверьте ключ.'];
+  sheet(`<div class="keyhead"><span class="medal big">${ic('key')}</span><div><p class="eyebrow">Перед сбором</p><h3>${txt[0]}</h3></div></div><p class="hint">${txt[1]}</p>
+   ${reason === 'net' ? '' : `<input id="k-key" type="password" autocomplete="off" value="${esc(st.accessKey)}" placeholder="Ключ из Telegram-бота">`}
+   <div class="actions two"><a class="btn ghost" href="${esc(bot)}" target="_blank" rel="noopener">Telegram-бот</a><button class="btn primary" id="k-go">${reason === 'net' ? 'Повторить' : 'Проверить'}</button></div>`, b => {
+    $('#k-go', b).onclick = () => { const k = $('#k-key', b); if (k) st.accessKey = k.value.trim(); save(); closeSheet(); retry(); };
   });
 }
-function firstEmpty() { for (let d = 0; d < S.plan.len; d++) for (let i = 0; i < S.plan.meals; i++) if (!S.plan.days[d].slots[i]) return [d, i]; return null; }
-const POOL_PER_SLOT = 5;
+function firstEmpty(fromDay = 0) {
+  for (let k = 0; k < S.plan.len; k++) { const d = (fromDay + k) % S.plan.len; for (let i = 0; i < S.plan.meals; i++) if (!S.plan.days[d].slots[i]) return [d, i]; }
+  return null;
+}
+const CARD_LIMIT = 15;
 async function startFeed(day, slot, manual) {
-  const total = S.plan.len * S.plan.meals;
-  S.feed = Object.assign({seen: {}, used: {}, pool: total * 3, poolUsed: 0}, S.feed || {}, {active: true, day, slot, manual, card: null, loading: true, exhausted: false});
-  const cur = S.plan.days[day].slots[slot]; if (cur) { const k = day + '-' + slot; S.feed.seen[k] = S.feed.seen[k] || []; if (!S.feed.seen[k].some(d => d.name === cur.dish.name)) S.feed.seen[k].push(cur.dish); }
-  render(); await nextCard(); S.feed.loading = false; render();
+  S.feed = Object.assign({v4: true, seen: {}, used: {}, counter: 0, homeQueue: []}, S.feed && S.feed.v4 ? S.feed : {}, {active: true, day, slot, manual, card: null, loading: true, exhausted: false, aiWarned: false});
+  render();
+  if (S.collect.homeOn && S.collect.home.length && canRemote() && S.plan.homeFor !== S.collect.home.join('|')) {
+    S.plan.homeFor = S.collect.home.join('|');
+    for (const si of pattern().map((m, i) => i).filter(i => 'ld'.includes(pattern()[i][0])).slice(0, 2)) {
+      try { const ctx = {day: 0, slot: si, type: pattern()[si][0], tg: slotTarget(0, si), seen: new Set()}; const d = await remoteDish('generate', ctx, {home_products: S.collect.home, use_home: true}); if (d && allowedByDiet(d)) S.feed.homeQueue.push(d); } catch (e) { noteRemoteError(e); break; }
+    }
+  }
+  await nextCard(); S.feed.loading = false; render();
 }
 
-/* ---------- Лента карточек ---------- */
+/* ---------- Лента карточек (как в знакомствах) ---------- */
+const FIC = {
+  take: '<path d="M5 12.5l4.2 4.2L19 7"/>', skip: '<path d="M6 6l12 12M18 6L6 18"/>',
+  dis: '<path d="M10 14.5v4.2a2.3 2.3 0 0 0 4.4.9l2.6-6.1V4.5H8.6a2 2 0 0 0-2 1.7l-1.1 6.2a2 2 0 0 0 2 2.3z" fill="currentColor" fill-opacity=".14"/><path d="M17 4.5h2.5v9H17"/>',
+  mark: '<path d="M5 19l1-4.2L15.6 5.2a2 2 0 0 1 2.8 0l.4.4a2 2 0 0 1 0 2.8L9.2 18 5 19z" fill="currentColor" fill-opacity=".14"/><path d="M14 7l3 3"/>'
+};
+const fic = n => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${FIC[n]}</svg>`;
+function cardHtml(d, m, slot) {
+  const ff = famFactor(d, slot), n = nut(d, ff), sec = SECTIONS[sectionOf(d)][0];
+  return `<article class="dcard" id="card" tabindex="0" aria-label="${esc(d.name)}">
+   <span class="stamp st-take">Взять</span><span class="stamp st-skip">Пропуск</span><span class="stamp st-dis">Не нравится</span><span class="stamp st-mark">Пометка</span>
+   <div class="dc-hero"><div class="plate"><i></i><b>${esc((d.name.trim()[0] || '·').toUpperCase())}</b></div><div class="dc-tags"><span>${m[1]}</span><span>${esc(d.cuisine || 'Домашняя')}</span><span>${sec}</span></div></div>
+   <div class="dc-body">
+    <h3 class="cname">${esc(d.name)}</h3>
+    <div class="grid4"><div><b>${r0(n.kcal)}</b><span>ккал</span></div><div><b>${r0(n.p)}</b><span>белки</span></div><div><b>${r0(n.f)}</b><span>жиры</span></div><div><b>${r0(n.c)}</b><span>углеводы</span></div></div>
+    <p class="meta"><span>${d.time} мин</span><span>сложность ${d.diff}/10</span><span>клетчатка ${r0(n.fib)} г</span><span>≈ ${r0(n.price / 10) * 10} ₽</span></p>
+    <p class="ingline">${d.ing.map(x => esc(x.name.toLowerCase())).join(' · ')}</p>
+    ${S.marks.notes[d.id] ? `<p class="note">${ic('heart', 'sm')} ${esc(S.marks.notes[d.id])}</p>` : ''}
+   </div></article>`;
+}
 function viewFeed() {
-  const F = S.feed, pat = pattern(), m = pat[F.slot], key = F.day + '-' + F.slot, used = F.used[key] || 0;
-  const dt = new Date(addDays(S.plan.start, F.day) + 'T12:00:00');
-  const taken = S.plan.days[F.day].slots;
+  const F = S.feed, pat = pattern(), m = pat[F.slot];
+  const dt = new Date(addDays(S.plan.start, F.day) + 'T12:00:00'), taken = S.plan.days[F.day].slots;
+  const total = S.plan.len * S.plan.meals, done = allSlots().length;
   let card;
-  if (F.loading) card = `<div class="card loading"><p class="mtype">${m[1]}</p><p>Подбираю блюдо под оставшиеся нормы дня…</p></div>`;
-  else if (F.exhausted) card = `<div class="card"><p class="mtype">${m[1]}</p><h3>Лимит карточек для этого приёма исчерпан</h3><p class="hint">Выберите из уже показанных или потратьте карточку из общего лимита недели (осталось ${Math.max(0, F.pool - F.poolUsed)}).</p><div class="actions"><button class="btn primary" id="f-pick">Выбрать из показанных</button><button class="btn ghost" id="f-pool">Использовать общий лимит</button></div></div>`;
-  else if (!F.card) card = `<div class="card"><h3>Подходящих блюд больше нет</h3><p class="hint">Ослабьте фильтры сложности или времени, уберите часть запретов либо выберите из показанных.</p><button class="btn ghost" id="f-pick">Выбрать из показанных</button></div>`;
-  else { const d = F.card.dish, ff = famFactor(d, F.slot), n = nut(d, ff);
-    card = `<div class="card" id="card"><div class="ctop"><span class="mtype">${m[1]}${F.card.desired ? ' · из желаемых' : ''}</span><span class="cnt">${d.src === 'ai' ? '' : (S.settings.apiKey ? 'база · ' : 'демо · ')}${used + 1} из ${POOL_PER_SLOT}</span></div>
-      <h3 class="cname">${esc(d.name)}</h3>
-      <div class="grid4"><div><b>${r0(n.kcal)}</b><span>ккал</span></div><div><b>${r0(n.p)}</b><span>белки</span></div><div><b>${r0(n.f)}</b><span>жиры</span></div><div><b>${r0(n.c)}</b><span>углеводы</span></div></div>
-      <p class="meta"><span>${d.time} мин</span><span>сложность ${d.diff}/10</span><span>клетчатка ${r0(n.fib)} г</span></p>
-      <p class="ingline">${d.ing.map(x => esc(x.name.toLowerCase())).join(', ')}</p>
-      <span class="price">≈ ${r0(n.price / 10) * 10} ₽</span>
-      <button class="btn mark" id="f-mark">Пометка</button></div>`; }
+  if (F.loading) card = `<article class="dcard skel"><div class="dc-hero"><div class="plate"><i></i></div></div><div class="dc-body"><p class="mtype">${m[1]}</p><span class="sk w70"></span><span class="sk w40"></span><span class="sk w90"></span><p class="hint">Подбираю блюдо под нормы дня…</p></div></article>`;
+  else if (F.exhausted || !F.card) card = `<article class="dcard end"><div class="dc-body"><p class="mtype">${m[1]}</p><h3>${F.exhausted ? 'Карточки для этого приёма закончились' : 'Подходящих блюд больше нет'}</h3><p class="hint">Выберите из показанных или ослабьте параметры: другая кухня, сложность выше, бюджет больше.</p><div class="actions"><button class="btn primary" id="f-pick">Выбрать из показанных</button>${S.collect.cuisine ? '<button class="btn ghost" id="f-any">Любая кухня</button>' : ''}</div></div></article>`;
+  else card = cardHtml(F.card.dish, m, F.slot);
   return `<section class="feed">
-   <header class="ftop"><button class="btn ghost sm" id="f-close">Готово</button><div class="fday"><button class="arrow" id="f-prev" aria-label="Предыдущий день">‹</button><span>${DOW[dt.getDay()]}, ${dt.getDate()} ${MON[dt.getMonth()]}</span><button class="arrow" id="f-next" aria-label="Следующий день">›</button></div><span class="sm">${taken.filter(Boolean).length}/${taken.length}</span></header>
+   <header class="ftop"><button class="btn ghost sm" id="f-close">Готово</button><div class="fday"><button class="arrow" id="f-prev" aria-label="Предыдущий день">‹</button><span>${DOW[dt.getDay()]}, ${dt.getDate()} ${MON[dt.getMonth()]}</span><button class="arrow" id="f-next" aria-label="Следующий день">›</button></div><span class="sm">${done}/${total}</span></header>
    <div class="slots">${pat.map((x, i) => `<button class="slot${i === F.slot ? ' on' : ''}${taken[i] ? ' done' : ''}" data-slot="${i}">${x[1]}</button>`).join('')}</div>
-   <div class="stage" id="stage">${card}</div>
-   <p class="gest">Вверх — поставить блюдо · вниз — следующее · влево и вправо — другой день</p>
-   <div class="actions two"><button class="btn ghost" id="f-skip">Следующее ↓</button><button class="btn primary" id="f-take">Поставить ↑</button></div>
+   <div class="deck" id="deck"><div class="ghostcard g2"></div><div class="ghostcard g1"></div>${card}</div>
+   <div class="fbtns">
+    <button class="fb fb-skip" id="f-skip" aria-label="Пропустить">${fic('skip')}<span>Пропуск</span></button>
+    <button class="fb fb-dis" id="f-dis" aria-label="Не нравится">${fic('dis')}<span>Не нравится</span></button>
+    <button class="fb fb-mark" id="f-mark" aria-label="Пометка">${fic('mark')}<span>Пометка</span></button>
+    <button class="fb fb-take" id="f-take" aria-label="Взять">${fic('take')}<span>Взять</span></button>
+   </div>
+   <p class="gest">← влево — взять · вправо → — пропустить · ↓ — не нравится · ↑ — пометка</p>
   </section>`;
 }
 function bindFeed() {
@@ -458,64 +647,85 @@ function bindFeed() {
   $('#f-close').onclick = () => { F.active = false; S.ui.tab = 'plan'; save(); render(); };
   $('#f-prev').onclick = () => goDay(-1); $('#f-next').onclick = () => goDay(1);
   document.querySelectorAll('[data-slot]').forEach(b => b.onclick = () => goSlot(F.day, +b.dataset.slot));
-  const take = $('#f-take'), skip = $('#f-skip');
-  take.disabled = skip.disabled = F.loading || !F.card || F.exhausted;
-  take.onclick = takeCard; skip.onclick = skipCard;
-  const mk = $('#f-mark'); if (mk) mk.onclick = markSheet;
+  const live = !F.loading && F.card && !F.exhausted;
+  ['#f-take', '#f-skip', '#f-dis', '#f-mark'].forEach(s => $(s).disabled = !live);
+  $('#f-take').onclick = () => fling('left'); $('#f-skip').onclick = () => fling('right'); $('#f-dis').onclick = () => fling('down'); $('#f-mark').onclick = markSheet;
   const pk = $('#f-pick'); if (pk) pk.onclick = pickSeen;
-  const pl = $('#f-pool'); if (pl) pl.onclick = async () => { if (F.poolUsed >= F.pool) { toast('Общий лимит недели исчерпан'); return; } F.poolUsed++; F.exhausted = false; F.loading = true; render(); await nextCard(); F.loading = false; render(); };
-  const card = $('#card'); if (!card) return;
-  let x0, y0, dx = 0, dy = 0;
-  card.addEventListener('pointerdown', e => { if (e.target.closest('button')) return; x0 = e.clientX; y0 = e.clientY; card.setPointerCapture(e.pointerId); card.classList.add('drag'); });
-  card.addEventListener('pointermove', e => { if (x0 == null) return; dx = e.clientX - x0; dy = e.clientY - y0; card.style.transform = `translate(${dx * 0.6}px, ${dy}px) rotate(${dx * 0.03}deg)`; card.dataset.hint = Math.abs(dy) > Math.abs(dx) ? (dy < 0 ? 'up' : 'down') : ''; });
-  card.addEventListener('pointerup', () => { if (x0 == null) return; card.classList.remove('drag'); x0 = null;
-    if (Math.abs(dy) > 90 && Math.abs(dy) > Math.abs(dx)) dy < 0 ? takeCard() : skipCard();
-    else if (Math.abs(dx) > 90) goDay(dx < 0 ? 1 : -1);
-    else card.style.transform = ''; dx = dy = 0; });
+  const an = $('#f-any'); if (an) an.onclick = () => { S.collect.cuisine = ''; F.exhausted = false; goSlot(F.day, F.slot); };
+  const card = $('#card'); if (!card || !live) return;
+  let x0 = null, y0, dx = 0, dy = 0;
+  const stamps = () => { const ax = Math.abs(dx), ay = Math.abs(dy), h = ax >= ay;
+    card.style.setProperty('--take', h && dx < 0 ? Math.min(1, ax / 110) : 0); card.style.setProperty('--skip', h && dx > 0 ? Math.min(1, ax / 110) : 0);
+    card.style.setProperty('--dis', !h && dy > 0 ? Math.min(1, ay / 110) : 0); card.style.setProperty('--mark', !h && dy < 0 ? Math.min(1, ay / 110) : 0); };
+  card.addEventListener('pointerdown', e => { x0 = e.clientX; y0 = e.clientY; dx = dy = 0; card.setPointerCapture(e.pointerId); card.classList.add('drag'); });
+  card.addEventListener('pointermove', e => { if (x0 == null) return; dx = e.clientX - x0; dy = e.clientY - y0; card.style.transform = `translate(${dx}px, ${dy * 0.9}px) rotate(${dx * 0.06}deg)`; stamps(); });
+  const end = () => { if (x0 == null) return; x0 = null; card.classList.remove('drag');
+    const ax = Math.abs(dx), ay = Math.abs(dy);
+    if (ax > 100 && ax >= ay) fling(dx < 0 ? 'left' : 'right');
+    else if (ay > 110 && dy > 0) fling('down');
+    else if (ay > 90 && dy < 0) { card.style.transform = ''; dx = dy = 0; stamps(); markSheet(); }
+    else { card.style.transform = ''; dx = dy = 0; stamps(); } };
+  card.addEventListener('pointerup', end); card.addEventListener('pointercancel', end);
 }
-function goDay(delta) { const F = S.feed; let d = (F.day + delta + S.plan.len) % S.plan.len; const slot = S.plan.days[d].slots.findIndex(s => !s); goSlot(d, slot < 0 ? 0 : slot); }
-async function goSlot(day, slot) { const F = S.feed; F.day = day; F.slot = slot; F.card = null; F.exhausted = (F.used[day + '-' + slot] || 0) >= POOL_PER_SLOT; F.loading = !F.exhausted; render(); if (!F.exhausted) { await nextCard(); F.loading = false; } render(); }
-function place(dish, desired) {
+let flinging = false;
+async function fling(dir) {
+  const F = S.feed; if (flinging || !F.card || F.loading) return; flinging = true;
+  const card = $('#card');
+  if (card) { card.classList.remove('drag'); card.style.setProperty('--' + ({left: 'take', right: 'skip', down: 'dis'})[dir], 1);
+    card.style.transform = {left: 'translate(-140%, -4%) rotate(-18deg)', right: 'translate(140%, -4%) rotate(18deg)', down: 'translate(0, 120%) rotate(4deg)'}[dir]; card.style.opacity = '0'; await sleep(260); }
+  flinging = false;
+  if (dir === 'left') return takeCard();
+  if (dir === 'right') return refuseCard(false);
+  return refuseCard(true);
+}
+document.addEventListener('keydown', e => {
+  if (!S.feed || !S.feed.active || !$('#card') || !$('#sheet').hidden) return;
+  const k = {ArrowLeft: 'left', ArrowRight: 'right', ArrowDown: 'down'}[e.key];
+  if (k) { e.preventDefault(); fling(k); } else if (e.key === 'ArrowUp') { e.preventDefault(); markSheet(); }
+});
+function goDay(delta) { const F = S.feed; const d = (F.day + delta + S.plan.len) % S.plan.len; const slot = S.plan.days[d].slots.findIndex(s => !s); goSlot(d, slot < 0 ? 0 : slot); }
+async function goSlot(day, slot) { const F = S.feed; F.day = day; F.slot = slot; F.card = null; F.exhausted = (F.used[day + '-' + slot] || 0) >= CARD_LIMIT; F.loading = !F.exhausted; render(); if (!F.exhausted) { await nextCard(); F.loading = false; } render(); }
+function place(dish) {
   const F = S.feed, pat = pattern(), dd = S.plan.days[F.day];
-  dd.slots[F.slot] = {dish, status: null, fromDesired: desired, manual: F.manual};
-  if (S.collect.cook2 && 'ld'.includes(pat[F.slot][0]) && F.day + 1 < S.plan.len && !S.plan.days[F.day + 1].slots[F.slot]) {
-    S.plan.days[F.day + 1].slots[F.slot] = {dish, status: null, fromDesired: desired, manual: F.manual, leftover: true};
-  }
+  dd.slots[F.slot] = {dish, status: null, manual: F.manual};
+  if (S.collect.cook2 && 'ld'.includes(pat[F.slot][0]) && F.day + 1 < S.plan.len && !S.plan.days[F.day + 1].slots[F.slot]) S.plan.days[F.day + 1].slots[F.slot] = {dish, status: null, leftover: true};
+  libTake(dish, pat[F.slot][0]);
+  if (!S.seenEver.includes(dish.id)) S.seenEver.push(dish.id);
   toast(`${pat[F.slot][1]}: «${dish.name}»`);
 }
 async function takeCard() {
   const F = S.feed; if (!F.card) return;
-  place(F.card.dish, F.card.desired);
-  const card = $('#card'); if (card) card.style.transform = 'translateY(-120%)';
-  // следующий пустой слот этого дня, затем следующих
-  let next = null;
-  for (let d = F.day; d < S.plan.len && !next; d++) for (let i = 0; i < S.plan.meals; i++) if (!S.plan.days[d].slots[i]) { next = [d, i]; break; }
+  place(F.card.dish);
+  const next = firstEmpty(F.day);
   if (!next) { F.active = false; S.ui.tab = 'plan'; save(); render(); toast('Рацион собран. Список покупок готов.'); return; }
   F.manual = false; save(); await goSlot(next[0], next[1]);
 }
-async function skipCard() {
-  const F = S.feed, key = F.day + '-' + F.slot;
+async function refuseCard(hard) {
+  const F = S.feed, key = F.day + '-' + F.slot, d = F.card.dish, type = pattern()[F.slot][0];
+  if (!S.seenEver.includes(d.id)) S.seenEver.push(d.id);
+  if (hard) { ban(d); toast('Больше не предложу'); }
+  else { const r = libRefuse(d, type); if (r === 'ban') toast('Второй отказ — блюдо удалено из ваших'); }
   F.used[key] = (F.used[key] || 0) + 1;
-  if (F.used[key] >= POOL_PER_SLOT) { F.exhausted = true; F.card = null; save(); render(); return; }
+  if (F.used[key] >= CARD_LIMIT) { F.exhausted = true; F.card = null; save(); render(); return; }
   F.loading = true; F.card = null; render(); await nextCard(); F.loading = false; render();
 }
 function pickSeen() {
-  const F = S.feed, list = (F.seen[F.day + '-' + F.slot] || []);
+  const F = S.feed, list = (F.seen[F.day + '-' + F.slot] || []).map(getDish).filter(d => d && !isBanned(d));
   if (!list.length) { toast('Ещё нет показанных блюд'); return; }
   sheet(`<h3>Показанные блюда</h3><div class="pick">${list.map((d, i) => { const n = nut(d, famFactor(d, F.slot)); return `<button class="pickrow" data-pick="${i}"><b>${esc(d.name)}</b><span>${kbju(n)}</span></button>`; }).join('')}</div>`, b => {
-    b.querySelectorAll('[data-pick]').forEach(x => x.onclick = () => { F.card = {dish: list[+x.dataset.pick], desired: false}; F.exhausted = false; closeSheet(); takeCard(); });
+    b.querySelectorAll('[data-pick]').forEach(x => x.onclick = () => { F.card = {dish: list[+x.dataset.pick], src: 'seen'}; F.exhausted = false; closeSheet(); takeCard(); });
   });
 }
 function markSheet() {
-  const d = S.feed.card.dish;
-  sheet(`<h3>Пометка: ${esc(d.name)}</h3><p class="hint">Пометки сохраняются в профиле, их можно изменить в настройках.</p>
-  <div class="actions"><button class="btn ghost" data-m="like">Нравится</button><button class="btn ghost" data-m="dislike">Не нравится — не предлагать</button><button class="btn ghost" data-m="allergy">Аллергия на ингредиент</button></div>`, b => {
-    b.querySelectorAll('[data-m]').forEach(x => x.onclick = () => {
-      const t = x.dataset.m;
-      if (t === 'allergy') { sheet(`<h3>На что аллергия?</h3><div class="pick">${d.ing.map(i => `<button class="pickrow" data-a="${esc(i.name)}"><b>${esc(i.name)}</b></button>`).join('')}</div>`, bb => bb.querySelectorAll('[data-a]').forEach(y => y.onclick = () => { S.marks.allergy.push(y.dataset.a); save(); closeSheet(); toast('Аллерген сохранён'); skipCard(); })); return; }
-      const arr = S.marks[t]; if (!arr.includes(d.name)) arr.push(d.name);
-      save(); closeSheet(); toast(t === 'like' ? 'Отмечено: нравится' : 'Больше не предложу'); if (t === 'dislike') skipCard();
-    });
+  const F = S.feed; if (!F || !F.card) return; const d = F.card.dish, liked = S.marks.like.includes(d.name);
+  sheet(`<p class="eyebrow">Пометка</p><h3>${esc(d.name)}</h3>
+  <div class="actions"><button class="btn ghost" id="mk-like">${liked ? 'Убрать «нравится»' : 'Нравится'}</button></div>
+  <label class="sublabel">Своя пометка<textarea id="mk-note" rows="3" placeholder="Например: делать без лука, детям меньше острого">${esc(S.marks.notes[d.id] || '')}</textarea></label>
+  <div class="actions"><button class="btn primary" id="mk-save">Сохранить пометку</button></div>
+  <details><summary>Аллергия на ингредиент</summary><div class="pick">${d.ing.map(i => `<button class="pickrow" data-a="${esc(i.name)}"><b>${esc(i.name)}</b></button>`).join('')}</div></details>`, b => {
+    $('#mk-like', b).onclick = () => { const a = S.marks.like; liked ? a.splice(a.indexOf(d.name), 1) : a.push(d.name); save(); closeSheet(); render(); toast(liked ? 'Пометка снята' : 'Отмечено: нравится'); };
+    $('#mk-save', b).onclick = () => { const t = $('#mk-note', b).value.trim(); if (t) S.marks.notes[d.id] = t; else delete S.marks.notes[d.id]; rememberDish(d); save(); closeSheet(); render(); toast('Пометка сохранена'); };
+    b.querySelectorAll('[data-a]').forEach(y => y.onclick = () => { if (!S.settings.forbidden.includes(y.dataset.a)) S.settings.forbidden.push(y.dataset.a); save(); closeSheet(); toast('Исключено для всей семьи'); refuseCard(false); });
   });
 }
 
@@ -573,15 +783,15 @@ function cheapen() {
   slots.sort((a, b) => b.price - a.price);
   let n = 0;
   slots.slice(0, 5).forEach(s => { const type = pattern()[s.i][0], cur = S.plan.days[s.di].slots[s.i];
-    const alt = DISHES.map(resolveDish).filter(d => d.types.includes(type) && allowedByDiet(d) && d.name !== cur.dish.name && countUses(d.name) < S.settings.maxRepeat)
+    const alt = Object.values(DBMAP).filter(d => d.types.includes(type) && allowedByDiet(d) && !isBanned(d) && d.id !== cur.dish.id && !usedInPlan(d.id))
       .map(d => ({d, p: nut(d, famFactor(d, s.i)).price})).filter(x => x.p < s.price * 0.8).sort((a, b) => a.p - b.p)[0];
     if (alt) { S.plan.days[s.di].slots[s.i] = {dish: alt.d, status: null, fromDesired: false}; n++; } });
   save(); render(); toast(n ? `Заменено блюд: ${n}` : 'Дешевле подходящих блюд не нашлось');
 }
 
 /* ---------- Настройки ---------- */
-const SET_PAGES = [['look','Оформление','Тема и акцент'],['family','Семья','Люди и их нормы'],['diet','Рацион и питание','Приёмы пищи, тип питания, запреты'],['marks','Пометки','Нравится, не нравится, аллергии'],['health','Здоровье','Важное предупреждение'],['key','Ключ доступа','Подписка'],['history','История','Прошлая неделя'],['data','Данные','Удаление с устройства'],['system','Системный','Промпт для нейросети · в разработке']];
-const SET_IC = {look:'look', family:'family', diet:'dish', marks:'heart', health:'shield', key:'key', history:'history', data:'data', system:'code'};
+const SET_PAGES = [['look','Оформление','Тема и акцент'],['family','Семья','Люди и их нормы'],['tastes','Мои вкусы','Тест, круги блюд, пометки, обмен'],['diet','Рацион и питание','Приёмы, тип питания, аллергии'],['health','Здоровье','Важное предупреждение'],['key','Ключ доступа','Подписка'],['history','История','Прошлая неделя'],['data','Данные','Удаление с устройства'],['system','Системный','Промпт для нейросети · в разработке']];
+const SET_IC = {look:'look', family:'family', diet:'dish', tastes:'heart', health:'shield', key:'key', history:'history', data:'data', system:'code'};
 function viewSettings() {
   const st = S.settings, M = S.marks, pg = S.ui.set, v = $('#view');
   if (!pg) {
@@ -589,7 +799,7 @@ function viewSettings() {
     v.innerHTML = `${appbar('Настройки', 'Профиль и приложение', {back: true})}
     <button class="profile" data-person="${me.id}"><span class="mono">${esc(me.name.slice(0, 1).toUpperCase())}</span><span><b>${esc(me.name)}</b><small>${r0(t.E)} ккал · белок ${r0(t.P)} г в день</small></span>${ic('chev', 'sm')}</button>
     <nav class="rows">${SET_PAGES.map(([k, t, s]) => `<button class="row" data-set="${k}"><span class="medal">${ic(SET_IC[k])}</span><span><b>${t}</b><small>${s}</small></span>${ic('chev', 'sm')}</button>`).join('')}</nav>
-    <p class="hint center">Мой рацион · MVP 0.2</p>`;
+    <p class="hint center">Мой рацион · версия 0.4</p>`;
     v.querySelectorAll('[data-set]').forEach(b => b.onclick = () => { S.ui.set = b.dataset.set; save(); render(); });
     v.querySelector('[data-person]').onclick = () => editPerson(me);
     return;
@@ -605,30 +815,33 @@ function viewSettings() {
   if (pg === 'diet') body = `<div class="panel">
     <label class="field"><span><em>Приёмов пищи в день</em><select id="st-meals">${[3,4,5].map(n => `<option value="${n}"${st.meals === n && !st.mealsAuto ? ' selected' : ''}>${n}</option>`).join('')}<option value="auto"${st.mealsAuto ? ' selected' : ''}>Автоматически по норме белка</option></select></span></label>
     <div class="field col"><em>Длина рациона</em><div class="seg">${[[7,'7 дней'],[3,'3 дня']].map(([k, t]) => `<button class="${st.planLen === k ? 'on' : ''}" data-len="${k}">${t}</button>`).join('')}</div></div>
-    <label class="field"><span><em>Одно блюдо за период — не чаще</em><select id="st-rep">${[1,2,3].map(n => `<option value="${n}"${st.maxRepeat === n ? ' selected' : ''}>${n} раз</option>`).join('')}</select></span></label>
-    <label class="field"><span><em>Тип питания</em><select id="st-diet">${[['all','Обычное'],['pesc','Без мяса, с рыбой'],['veg','Вегетарианское'],['vegan','Веганское']].map(([k, t]) => `<option value="${k}"${st.diet === k ? ' selected' : ''}>${t}</option>`).join('')}</select></span></label>
+    <label class="field"><span><em>Тип питания</em><select id="st-diet">${[['all','Обычное'],['nopork','Без свинины'],['pesc','Без мяса, с рыбой'],['veg','Вегетарианское'],['vegan','Веганское']].map(([k, t]) => `<option value="${k}"${st.diet === k ? ' selected' : ''}>${t}</option>`).join('')}</select></span></label>
     <label class="field"><span><em>Нормы</em><select id="st-norms"><option value="NASEM"${st.norms === 'NASEM' ? ' selected' : ''}>Международные (NASEM)</option><option value="RU"${st.norms === 'RU' ? ' selected' : ''}>Российские (МР 2.3.1.0253-21)</option></select></span></label>
-    <div class="field col"><em>Запрещённые продукты для всей семьи</em><div class="chipin"><input id="st-forb" placeholder="Например, грибы"><button class="btn ghost sm" id="st-forb-add">Добавить</button></div>${st.forbidden.length ? `<div class="chips">${st.forbidden.map((w, i) => `<button class="chip x" data-rmforb="${i}">${esc(w)}</button>`).join('')}</div>` : ''}</div></div>`;
-  if (pg === 'marks') body = `<p class="hint">Пометки учитываются при подборе. Добавляйте свои или ставьте их кнопкой «Пометка» на карточке блюда.</p>` + [['like','Нравится','Например, сырники'],['dislike','Не нравится','Например, печень'],['allergy','Аллергии','Например, орехи']].map(([k, t, ph]) => `<h4>${t}</h4><div class="panel"><div class="field col"><div class="chipin"><input id="mk-${k}" placeholder="${ph}" enterkeyhint="done"><button class="btn ghost sm" data-addmark="${k}">Добавить</button></div>${M[k].length ? `<div class="chips">${M[k].map((w, i) => `<button class="chip x" data-rmmark="${k}:${i}">${esc(w)}</button>`).join('')}</div>` : ''}</div></div>`).join('');
+    <div class="field col"><em>Запрещённые продукты для всей семьи</em><div class="chipin"><input id="st-forb" placeholder="Например, грибы"><button class="btn ghost sm" id="st-forb-add">Добавить</button></div>${st.forbidden.length ? `<div class="chips">${st.forbidden.map((w, i) => `<button class="chip x" data-rmforb="${i}">${esc(w)}</button>`).join('')}</div>` : ''}</div></div>
+    <h4>Аллергии в семье</h4><p class="hint">Отмеченное убирается из блюд у всех членов семьи.</p><div class="panel">${ALLERGENS.map(([k, t]) => `<label class="field check"><input type="checkbox" data-alg="${k}"${(st.allergens || []).includes(k) ? ' checked' : ''}><span>${t}</span></label>`).join('')}</div>`;
+  if (pg === 'tastes') body = tastesHtml();
   if (pg === 'health') body = `<div class="alert">${ic('shield')}<div><b>Важно</b><p>Приложение опирается на официальные нормы питания и подробный научный отчёт, но не заменяет врача и не гарантирует результат. При состояниях из списка ниже им лучше не пользоваться — посоветуйтесь с врачом или диетологом.</p></div></div>
     <h4>Состояния</h4><div class="panel">${meds.map(([k, t]) => `<label class="field check"><input type="checkbox" data-med="${k}"${st.medical[k] ? ' checked' : ''}><span>${t}</span></label>`).join('')}</div>
     <p class="hint">Если отметить хотя бы одно, автоматический сбор рациона отключится.</p>`;
-  if (pg === 'key') body = `<div class="panel"><label class="field"><span><em>Ключ доступа</em><input id="st-key" type="password" autocomplete="off" value="${esc(st.apiKey)}" placeholder="Ключ из Telegram-бота"></span></label></div><p class="hint">Ключ также запрашивается при нажатии «Собрать рацион». Без ключа работает демо-режим.</p>`;
+  if (pg === 'key') body = `<div class="panel"><label class="field"><span><em>Ключ доступа</em><input id="st-acc" type="password" autocomplete="off" value="${esc(st.accessKey)}" placeholder="Ключ из Telegram-бота"></span></label></div>
+    <p class="hint">Подписка проверяется один раз — когда вы нажимаете «Собрать рацион». Собранная неделя работает без проверок.</p>
+    <h4>Для разработчика</h4><div class="panel"><label class="field"><span><em>Адрес сервера (Cloudflare Worker)</em><input id="st-srv" autocomplete="off" value="${esc(st.serverUrl)}" placeholder="https://….workers.dev"></span></label>
+    <label class="field"><span><em>Ссылка на Telegram-бота</em><input id="st-bot" autocomplete="off" value="${esc(st.botUrl)}" placeholder="https://t.me/…"></span></label>
+    <label class="field"><span><em>Ключ Gemini (тест без сервера)</em><input id="st-key" type="password" autocomplete="off" value="${esc(st.apiKey)}" placeholder="Только для проверки"></span></label></div>
+    <p class="hint">Пока сервер не подключён, приложение работает на базе блюд в телефоне. Ключ Gemini здесь — временный способ проверить нейросеть: в рабочей версии он хранится только на сервере.</p>`;
   if (pg === 'history') body = S.lastWeek ? historyHtml() : '<div class="empty"><h3>Истории пока нет</h3><p>Прошлая неделя появится здесь после окончания текущей.</p></div>';
   if (pg === 'system') {
     let sample;
     try {
-      const day = S.plan ? Math.min(S.ui.day, S.plan.len - 1) : 0, slot = 0;
-      const pat = pattern(), tg = S.plan ? slotTarget(day, slot) : (() => { const f = familyDay(), sh = pat[0][2] / 100; return {E: f.E * sh, P: f.P * pat[0][3] / 100, F: f.F * sh, C: f.C * sh, fib: f.fib * sh}; })();
-      sample = {meal: pat[slot][1], people: S.people.length, target_family: {kcal: r0(tg.E), protein_g: r0(tg.P), fat_g: r0(tg.F), carbs_g: r0(tg.C), fiber_g: r0(tg.fib)},
-        diet: st.diet, forbidden: [...st.forbidden, ...S.marks.allergy], dislike: S.marks.dislike, liked: S.marks.like, not_these: [], desired: S.collect.desired,
-        difficulty: S.collect.diff, max_time_min: +S.collect.maxTime || null, cuisine: S.collect.cuisine || null, home_products: S.collect.homeOn ? S.collect.home : []};
+      if (!S.plan) newPlan();
+      const day = Math.min(S.ui.day, S.plan.len - 1), slot = 0;
+      sample = requestBody({day, slot, tg: slotTarget(day, slot)}, {});
     } catch (e) { sample = {error: e.message}; }
-    body = `<div class="alert">${ic('code')}<div><b>Только для разработчика</b><p>Раздел в разработке. Здесь показано ровно то, что приложение отправляет нейросети при подборе одной карточки.</p></div></div>
-    <h4>Куда уходит запрос</h4><div class="panel"><div class="field col"><em>Сервис</em><code class="mono-t">Gemini API · generateContent</code></div><div class="field col"><em>Модели (по очереди)</em><code class="mono-t">${GEMINI_MODELS.join(' → ')}</code></div><div class="field col"><em>Ключ</em><code class="mono-t">${st.apiKey ? 'введён · ' + st.apiKey.length + ' симв.' : 'не введён — демо-режим, запросов нет'}</code></div><div class="field col"><em>Параметры</em><code class="mono-t">temperature 0.9 · ответ JSON</code></div></div>
-    <h4>Системный промпт</h4><pre class="code">${esc(SYSTEM_PROMPT)}</pre>
-    <h4>Сообщение пользователя · пример для первого приёма</h4><pre class="code">${esc(JSON.stringify(sample, null, 2))}</pre>
-    <p class="hint">Цели приёма приложение пересчитывает перед каждой карточкой с учётом уже выбранных блюд дня. Промпт один на все приёмы, отличаются данные.</p>
+    const L = curSys();
+    body = `<div class="alert">${ic('code')}<div><b>Только для разработчика</b><p>Здесь видно, куда и что приложение отправляет. Нейросеть вызывается редко: желаемое блюдо, продукты дома и когда в базе кончились свежие блюда.</p></div></div>
+    <h4>Куда уходит запрос</h4><div class="panel"><div class="field col"><em>Режим</em><code class="mono-t">${st.serverUrl ? 'сервер: ' + esc(st.serverUrl) : st.apiKey ? 'напрямую в Gemini (тест)' : 'только база в телефоне'}</code></div><div class="field col"><em>Модели Gemini</em><code class="mono-t">${GEMINI_MODELS.join(' → ')}</code></div><div class="field col"><em>Задержка карточки</em><code class="mono-t">${cardDelay()} мс · медиана последних ответов нейросети</code></div><div class="field col"><em>База в телефоне</em><code class="mono-t">${Object.keys(DBMAP).length} блюд · своих ${Object.keys(S.dishStore).length} · удалено ${S.banned.ids.length}</code></div><div class="field col"><em>Текущая система кругов</em><code class="mono-t">${esc(L)}</code></div></div>
+    <h4>Системный промпт</h4><pre class="code">${esc(systemPrompt())}</pre>
+    <h4>Запрос · пример для первого приёма</h4><pre class="code">${esc(JSON.stringify(sample, null, 2))}</pre>
     <button class="btn ghost wide" id="sys-copy">Скопировать промпт и пример</button>`;
   }
   if (pg === 'data') body = `<p class="hint">Все данные хранятся только на этом устройстве.</p><button class="btn ghost wide danger" id="st-wipe">Удалить все данные</button>`;
@@ -640,19 +853,109 @@ function viewSettings() {
   on('#st-add', 'onclick', () => editPerson(null));
   on('#st-meals', 'onchange', e => { if (e.target.value === 'auto') st.mealsAuto = true; else { st.mealsAuto = false; st.meals = +e.target.value; } planShapeChanged(); });
   v.querySelectorAll('[data-len]').forEach(b => b.onclick = () => { st.planLen = +b.dataset.len; planShapeChanged(); });
-  on('#st-rep', 'onchange', e => { st.maxRepeat = +e.target.value; save(); });
+  v.querySelectorAll('[data-alg]').forEach(b => b.onchange = () => { const k = b.dataset.alg, a = st.allergens = st.allergens || []; b.checked ? a.includes(k) || a.push(k) : a.splice(a.indexOf(k), 1); save(); });
+  on('#st-acc', 'onchange', e => { st.accessKey = e.target.value.trim(); save(); });
+  on('#st-srv', 'onchange', e => { st.serverUrl = e.target.value.trim(); save(); });
+  on('#st-bot', 'onchange', e => { st.botUrl = e.target.value.trim(); save(); });
+  if (pg === 'tastes') bindTastes(v);
   on('#st-diet', 'onchange', e => { st.diet = e.target.value; save(); });
   on('#st-norms', 'onchange', e => { st.norms = e.target.value; save(); });
   const fa = () => { const x = $('#st-forb').value.trim(); if (x) { st.forbidden.push(x); save(); render(); } };
   on('#st-forb-add', 'onclick', fa); on('#st-forb', 'onkeydown', e => { if (e.key === 'Enter') fa(); });
   v.querySelectorAll('[data-rmforb]').forEach(b => b.onclick = () => { st.forbidden.splice(+b.dataset.rmforb, 1); save(); render(); });
-  v.querySelectorAll('[data-rmmark]').forEach(b => b.onclick = () => { const [k, i] = b.dataset.rmmark.split(':'); S.marks[k].splice(+i, 1); save(); render(); });
   v.querySelectorAll('[data-med]').forEach(b => b.onchange = () => { st.medical[b.dataset.med] = b.checked; save(); });
   on('#st-key', 'onchange', e => { st.apiKey = e.target.value.trim(); save(); });
-  v.querySelectorAll('[data-addmark]').forEach(b => { const k = b.dataset.addmark, inp = $('#mk-' + k); const add = () => { const x = inp.value.trim(); if (x && !S.marks[k].includes(x)) { S.marks[k].push(x); save(); render(); } }; b.onclick = add; inp.onkeydown = e => { if (e.key === 'Enter') add(); }; });
   on('#sys-copy', 'onclick', async () => { const t = Array.from(v.querySelectorAll('pre.code')).map(x => x.textContent).join('\n\n'); try { await navigator.clipboard.writeText(t); toast('Скопировано'); } catch (e) { toast('Не удалось скопировать'); } });
   on('#st-wipe', 'onclick', () => sheet(`<h3>Удалить все данные?</h3><p>Профили, рацион, пометки и ключ будут удалены с этого устройства.</p><div class="actions two"><button class="btn ghost" id="w-no">Отмена</button><button class="btn primary" id="w-yes">Удалить</button></div>`, b => { $('#w-no', b).onclick = closeSheet; $('#w-yes', b).onclick = () => { S = defaults(); save(); closeSheet(); render(); }; }));
 }
+/* ---------- Мои вкусы: тест, круги, пометки, обмен ---------- */
+function tastesHtml() {
+  const T = S.taste, w = T.w, pat = pattern(), types = [...new Set(pat.map(m => m[0]))], names = {b: 'Завтраки', l: 'Обеды', d: 'Ужины', s: 'Перекусы'};
+  const wl = v => v > 0.1 ? 'like' : v < -0.1 ? 'dis' : '';
+  const banned = S.banned.ids.map(getDish).filter(Boolean);
+  const notes = Object.entries(S.marks.notes).map(([id, t]) => [getDish(id), t]).filter(x => x[0]);
+  return `<div class="alert">${ic('heart')}<div><b>${T.done ? 'Тест пройден' : 'Тест вкусов'}</b><p>${T.done ? 'Вкусы учитываются при подборе. Пройти заново можно в любой момент.' : '1–2 минуты: выберите из пар блюд то, что больше нравится. Выбранное сразу попадёт в ваши круги.'}</p></div></div>
+  <div class="actions two"><button class="btn primary" data-test="self">Пройти самостоятельно</button><button class="btn ghost" data-test="family">Пройти с семьёй</button></div>
+  <h4>Кухни</h4><p class="hint">Нажмите, чтобы переключить: нравится → не нравится → всё равно.</p>
+  <div class="chips">${CUISINES.map(c => `<button class="chip pref ${wl(w[c] || 0)}" data-cw="${esc(c)}">${c}${wl(w[c] || 0) === 'like' ? ' · нравится' : wl(w[c] || 0) === 'dis' ? ' · не нравится' : ''}</button>`).join('')}</div>
+  <h4>Круги блюд · ${esc(S.collect.cuisine || 'любая кухня')} · ${SECTIONS[S.collect.section][0].toLowerCase()}</h4>
+  <div class="panel"><ul class="ing">${types.map(t => { const L = lib(curSys(), t); return `<li><span>${names[t]}</span><b>${L.main.length} из ${capacity(t)} · вторичный ${L.sec.length} из ${SEC_CAP}</b></li>`; }).join('')}</ul></div>
+  <p class="hint">Круги формируются 2 недели, полный цикл — 4 недели. Для каждой кухни и сложности — свои круги.</p>
+  ${notes.length || S.marks.like.length ? `<h4>Пометки</h4><div class="panel">${S.marks.like.length ? `<div class="field col"><em>Нравится</em><div class="chips">${S.marks.like.map((n, i) => `<button class="chip x" data-unlike="${i}">${esc(n)}</button>`).join('')}</div></div>` : ''}${notes.map(([d, t]) => `<div class="field col"><em>${esc(d.name)}</em><span>${esc(t)}</span></div>`).join('')}</div>` : ''}
+  <h4>Обмен вкусами</h4>
+  <div class="actions two"><button class="btn ghost" id="tx-exp">Поделиться вкусами</button><button class="btn ghost" id="tx-imp">Добавить чужие вкусы</button></div>
+  ${S.imports.map((im, i) => `<div class="box"><span><b>${esc(im.label)}</b> · ${im.ids.length} блюд</span><div class="seg">${[0, 25, 50, 75].map(v => `<button class="${im.share === v ? 'on' : ''}" data-share="${i}:${v}">${v ? v + '%' : 'Выкл'}</button>`).join('')}</div><button class="btn ghost sm" data-rmimp="${i}">Удалить</button></div>`).join('')}
+  <p class="hint">Код содержит только рецепты за последние 3 дня — без веса, здоровья и имён. Его может прочитать только это приложение.</p>
+  ${banned.length ? `<h4>Удалены навсегда · ${banned.length}</h4><div class="chips">${banned.map(d => `<button class="chip x" data-unban="${esc(d.id)}" title="Вернуть">${esc(d.name)}</button>`).join('')}</div><p class="hint">Нажмите на блюдо, чтобы вернуть его.</p>` : ''}
+  <button class="btn ghost wide danger" id="tx-reset">Очистить круги блюд</button>`;
+}
+function bindTastes(v) {
+  v.querySelectorAll('[data-test]').forEach(b => b.onclick = () => tasteTest(b.dataset.test));
+  v.querySelectorAll('[data-cw]').forEach(b => b.onclick = () => { const c = b.dataset.cw, x = S.taste.w[c] || 0; S.taste.w[c] = x > 0.1 ? -0.3 : x < -0.1 ? 0 : 0.3; save(); render(); });
+  v.querySelectorAll('[data-unlike]').forEach(b => b.onclick = () => { S.marks.like.splice(+b.dataset.unlike, 1); save(); render(); });
+  v.querySelectorAll('[data-unban]').forEach(b => b.onclick = () => { unban(b.dataset.unban); save(); render(); toast('Блюдо вернётся в подбор'); });
+  v.querySelectorAll('[data-share]').forEach(b => b.onclick = () => { const [i, s] = b.dataset.share.split(':').map(Number); S.imports[i].share = s; save(); render(); });
+  v.querySelectorAll('[data-rmimp]').forEach(b => b.onclick = () => { S.imports.splice(+b.dataset.rmimp, 1); save(); render(); });
+  $('#tx-exp').onclick = exportTastes; $('#tx-imp').onclick = importTastes;
+  $('#tx-reset').onclick = () => sheet(`<h3>Очистить круги?</h3><p>Основные и вторичные круги всех кухонь будут пустыми и начнут формироваться заново. Удалённые навсегда блюда останутся удалёнными.</p><div class="actions two"><button class="btn ghost" id="cr-no">Отмена</button><button class="btn primary" id="cr-yes">Очистить</button></div>`, b => { $('#cr-no', b).onclick = closeSheet; $('#cr-yes', b).onclick = () => { S.lib = {}; save(); closeSheet(); render(); }; });
+}
+function tasteTest(mode) {
+  S.taste.mode = mode;
+  const pool = Object.values(DBMAP).filter(d => allowedByDiet(d) && !isBanned(d)), pairs = [];
+  ['b', 'l', 'd', 'b', 'l', 'd', 's', 'l'].forEach(t => { const c = pool.filter(d => d.types.includes(t) && !pairs.flat().includes(d)).sort(() => Math.random() - 0.5); const a = c[0], b = c.find(x => x !== a && x.cuisine !== a.cuisine) || c[1]; if (a && b) pairs.push([a, b, t]); });
+  let i = 0;
+  const step = () => {
+    if (i >= pairs.length) { S.taste.done = true; save(); closeSheet(); render(); toast('Готово: вкусы учтены'); return; }
+    const [a, b] = pairs[i];
+    sheet(`<p class="eyebrow">${mode === 'family' ? 'Выбирайте вместе' : 'Тест вкусов'} · ${i + 1} из ${pairs.length}</p><h3>Что больше по душе?</h3>
+     <div class="pair">${[a, b].map((d, k) => `<button class="pcard" data-p="${k}"><b>${esc(d.name)}</b><small>${esc(d.cuisine)} · ${d.time} мин</small></button>`).join('')}</div>
+     <div class="actions two"><button class="btn ghost" data-p="both">Оба</button><button class="btn ghost" data-p="none">Ни одно</button></div>`, el => el.querySelectorAll('[data-p]').forEach(x => x.onclick = () => {
+        const p = x.dataset.p, t = pairs[i][2], pick = p === 'both' ? [a, b] : p === 'none' ? [] : [[a, b][+p]];
+        pick.forEach(d => { libTake(d, d.types.includes(t) ? t : d.types[0]); S.taste.w[d.cuisine] = Math.min(0.6, (S.taste.w[d.cuisine] || 0) + 0.12); });
+        if (p === 'none') [a, b].forEach(d => { S.taste.w[d.cuisine] = Math.max(-0.6, (S.taste.w[d.cuisine] || 0) - 0.05); });
+        i++; save(); step(); }));
+  };
+  step();
+}
+const XKEY = 'moy-racion · обмен вкусами · v1';
+async function xKey() { const h = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(XKEY)); return crypto.subtle.importKey('raw', h, 'AES-GCM', false, ['encrypt', 'decrypt']); }
+const b64u = buf => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const unb64u = s => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4)), c => c.charCodeAt(0));
+async function gz(str, back) { const st = new Blob([str]).stream().pipeThrough(back ? new DecompressionStream('gzip') : new CompressionStream('gzip')); return back ? new Response(st).text() : new Uint8Array(await new Response(st).arrayBuffer()); }
+function recentDishes() {
+  const src = S.plan || S.lastWeek; if (!src) return [];
+  const ti = S.plan ? Math.min(todayIdx(), src.len - 1) : src.len - 1, days = [];
+  for (let d = ti; d >= 0 && days.length < 3; d--) if (src.days[d].slots.some(Boolean)) days.push(d);
+  if (!days.length) for (let d = 0; d < Math.min(3, src.len); d++) days.push(d);
+  const out = {}; days.forEach(d => src.days[d].slots.forEach(s => { if (s && !s.leftover) out[s.dish.id] = s.dish; }));
+  return Object.values(out);
+}
+async function exportTastes() {
+  const list = recentDishes(); if (!list.length) { toast('Пока нечем делиться: соберите рацион'); return; }
+  const data = {v: 1, label: S.people[0] ? 'Вкусы ' + S.people[0].name : 'Вкусы', dishes: list.map(d => ({name: d.name, types: d.types, time: d.time, diff: d.diff, cuisine: d.cuisine, steps: d.steps, salt: d.salt, ing: d.ing.map(i => ({id: i.id, name: i.name, g: i.g, kcal: i.kcal, p: i.p, f: i.f, c: i.c, fib: i.fib, price: i.price, cat: i.cat, unit: i.unit, flags: i.flags, na: i.na}))}))};
+  try {
+    const iv = crypto.getRandomValues(new Uint8Array(12)), ct = await crypto.subtle.encrypt({name: 'AES-GCM', iv}, await xKey(), await gz(JSON.stringify(data)));
+    const code = 'MR1-' + b64u(iv) + '.' + b64u(ct);
+    sheet(`<h3>Код ваших вкусов</h3><p class="hint">${list.length} блюд за последние дни. Отправьте код — его откроет только «Мой рацион».</p><textarea class="copybox" id="xc" readonly>${code}</textarea><button class="btn primary wide" id="xc-copy">Скопировать</button>`, b => { $('#xc-copy', b).onclick = async () => { try { await navigator.clipboard.writeText(code); toast('Код скопирован'); } catch (e) { $('#xc', b).select(); } }; });
+  } catch (e) { toast('Браузер не поддерживает шифрование: ' + e.message); }
+}
+function importTastes() {
+  sheet(`<h3>Чужие вкусы</h3><p class="hint">Вставьте код «MR1-…». Блюда пройдут ваши запреты и фильтр здоровья.</p><textarea id="xi" rows="4" placeholder="MR1-…"></textarea><button class="btn primary wide" id="xi-go">Добавить</button>`, b => {
+    $('#xi-go', b).onclick = async () => {
+      try {
+        const raw = $('#xi', b).value.trim(); if (!raw.startsWith('MR1-')) throw new Error('не тот формат');
+        const [iv, ct] = raw.slice(4).split('.').map(unb64u);
+        const data = JSON.parse(await gz(new Uint8Array(await crypto.subtle.decrypt({name: 'AES-GCM', iv}, await xKey(), ct)), true));
+        const all = (data.dishes || []).map((o, k) => Object.assign({}, o, {id: 'im' + Date.now().toString(36) + k, src: 'import'}));
+        const ok = all.filter(d => d.name && Array.isArray(d.ing) && allowedByDiet(d) && !isBanned(d));
+        ok.forEach(rememberDish);
+        S.imports.unshift({label: String(data.label || 'Чужие вкусы').slice(0, 40), ids: ok.map(d => d.id), share: 25}); S.imports = S.imports.slice(0, 3);
+        save(); closeSheet(); render(); toast(`Добавлено блюд: ${ok.length}${all.length > ok.length ? `, убрано из-за ваших запретов: ${all.length - ok.length}` : ''}`);
+      } catch (e) { toast('Код не подошёл: ' + e.message); }
+    };
+  });
+}
+
 function planShapeChanged() {
   save();
   if (S.plan && (S.plan.meals !== mealsCount() || S.plan.len !== S.settings.planLen) && S.plan.days.some(d => d.slots.some(Boolean)))
@@ -662,7 +965,8 @@ function planShapeChanged() {
 function editPerson(p) {
   sheet(`<h3>${p ? 'Изменить' : 'Новый человек'}</h3>${personForm(p || {sex: 'f', age: 30, height: 165, weight: 60})}
    <div class="actions two">${p && S.people.length > 1 ? '<button class="btn ghost danger" id="pp-del">Удалить</button>' : '<span></span>'}<button class="btn primary" id="pp-save">Сохранить</button></div>`, b => {
-    $('#pp-save', b).onclick = () => { const np = readPerson(p && p.id); if (!np) return; if (p) S.people[S.people.findIndex(x => x.id === p.id)] = np; else S.people.push(np); save(); closeSheet(); render(); };
+    $('#pp-save', b).onclick = () => { const np = readPerson(p && p.id); if (!np) return; if (p) S.people[S.people.findIndex(x => x.id === p.id)] = np; else S.people.push(np); save(); closeSheet(); render();
+      if (!p) sheet(`<p class="eyebrow">Новый человек в семье</p><h3>Пройти тест вкусов?</h3><p class="hint">Ответы ${esc(np.name)} добавятся к общему профилю семьи.</p><div class="actions"><button class="btn primary" id="nt-self">Пройти самостоятельно</button><button class="btn ghost" id="nt-fam">Пройти с семьёй</button><button class="btn ghost" id="nt-later">Позже</button></div>`, bb => { $('#nt-self', bb).onclick = () => tasteTest('self'); $('#nt-fam', bb).onclick = () => tasteTest('family'); $('#nt-later', bb).onclick = closeSheet; }); };
     const del = $('#pp-del', b); if (del) del.onclick = () => { S.people = S.people.filter(x => x.id !== p.id); save(); closeSheet(); render(); };
   });
 }
@@ -671,6 +975,15 @@ function historyHtml() {
   return L.days.map((d, i) => { const dt = new Date(addDays(L.start, i) + 'T12:00:00'); return `<h4>${DOW[dt.getDay()]}, ${dt.getDate()} ${MON[dt.getMonth()]}</h4><ul class="ing">${d.slots.map((s, k) => `<li><span>${pat[k][1]}</span><b>${s ? esc(s.dish.name) : '—'}</b></li>`).join('')}</ul>`; }).join('');
 }
 
+/* ---------- Фоновая синхронизация общей базы (раз в неделю, незаметно) ---------- */
+async function syncServer() {
+  const st = S.settings; if (!st.serverUrl || (S.lastSync && Date.now() - S.lastSync.at < 7 * 864e5)) return;
+  try {
+    const r = await fetch(st.serverUrl.replace(/\/$/, '') + '/sync?since=' + encodeURIComponent((S.lastSync && S.lastSync.until) || '1970-01-01')); if (!r.ok) return;
+    const j = await r.json(); (j.dishes || []).forEach(o => { try { const d = normalizeDish(o, o.types || 'l'); d.id = o.id; d.src = 'server'; S.dishStore[d.id] = d; } catch (e) {} });
+    S.lastSync = {at: Date.now(), until: j.until}; save();
+  } catch (e) {}
+}
 /* ---------- Запуск ---------- */
 $('#nav div').innerHTML = [['plan','Рацион'],['shop','Продукты'],['collect','Сбор']].map(([k, t]) => `<button class="tab" data-tab="${k}"><span class="tab-ic">${ic(k)}</span>${t}</button>`).join('');
 document.querySelectorAll('.tab').forEach(b => b.onclick = () => { S.ui.tab = b.dataset.tab; S.ui.set = null; save(); render(); });
@@ -682,5 +995,6 @@ $('#sheet').addEventListener('click', e => { if (e.target.id === 'sheet' || e.ta
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSheet(); });
 if (S.feed && S.feed.active) { S.feed.loading = false; if (!S.feed.card && !S.feed.exhausted) S.feed.active = false; }
 render();
+setTimeout(syncServer, 3000);
 if ('serviceWorker' in navigator && location.protocol === 'https:' && !location.hostname.endsWith('claude.ai') && !location.hostname.includes('claudeusercontent')) navigator.serviceWorker.register('sw.js').catch(() => {});
 })();
