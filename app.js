@@ -302,7 +302,7 @@ function systemPrompt() {
 function requestBody(ctx, extra = {}) {
   const pat = pattern()[ctx.slot], tg = ctx.tg;
   return Object.assign({meal: pat[1], type: pat[0], people: S.people.length, target_family: {kcal: r0(tg.E), protein_g: r0(tg.P), fat_g: r0(tg.F), carbs_g: r0(tg.C), fiber_g: r0(tg.fib)},
-    diet: S.settings.diet, difficulty: secs().map(i => SECTIONS[i][0] + ' (' + SECTIONS[i][1] + ')').join(' или '), budget_rub: r0(slotBudget(ctx.slot))}, extra);
+    diet: S.settings.diet, sections: secs(), difficulty: secs().map(i => SECTIONS[i][0] + ' (' + SECTIONS[i][1] + ')').join(' или '), budget_rub: r0(slotBudget(ctx.slot))}, extra);
 }
 const canRemote = () => !!(S.settings.serverUrl || S.settings.apiKey);
 function noteRemoteError(e) { const F = S.feed; if (F && !F.aiWarned) { F.aiWarned = true; toast('Нейросеть недоступна: ' + e.message + '. Беру блюда из базы.'); } }
@@ -343,10 +343,17 @@ async function verifyAccess() { // одна проверка подписки п
 
 /* ---------- UI: общие ---------- */
 function toast(t) { const el = $('#toast'); el.textContent = t; el.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => el.hidden = true, 2600); }
-function sheet(html, onMount) {
-  const el = $('#sheet'); $('#sheet-body').innerHTML = html; el.hidden = false; $('#sheet-body').scrollTop = 0; onMount && onMount($('#sheet-body'));
+function sheet(html, onMount, opts = {}) {
+  const el = $('#sheet'); el.classList.toggle('full', !!opts.full); el.classList.remove('pulling'); $('.sheet-card').style.transform = '';
+  $('#sheet-body').innerHTML = html; el.hidden = false; $('#sheet-body').scrollTop = 0; document.body.classList.add('sheeted'); onMount && onMount($('#sheet-body'));
 }
-const closeSheet = () => { $('#sheet').hidden = true; };
+const closeSheet = () => { $('#sheet').hidden = true; document.body.classList.remove('sheeted'); };
+(function pullToClose() { // полноэкранное окно: потянуть вниз от верха — закрыть
+  const body = $('#sheet-body'), card = $('.sheet-card'); let y0 = null, dy = 0;
+  body.addEventListener('touchstart', e => { y0 = body.scrollTop <= 0 ? e.touches[0].clientY : null; dy = 0; }, {passive: true});
+  body.addEventListener('touchmove', e => { if (y0 == null) return; dy = e.touches[0].clientY - y0; if (dy <= 0) { card.style.transform = ''; return; } card.style.transition = 'none'; card.style.transform = `translateY(${110 * (1 - Math.exp(-dy / 110))}px)`; }, {passive: true});
+  body.addEventListener('touchend', () => { if (y0 == null) return; y0 = null; card.style.transition = ''; card.style.transform = ''; if (dy > 90) closeSheet(); });
+})();
 function applyTheme() { const r = document.documentElement; if (S.theme === 'system') r.removeAttribute('data-theme'); else r.setAttribute('data-theme', S.theme); r.setAttribute('data-accent', S.accent || 'gold'); }
 const IC = {
   plus: '<path d="M12 5v14M5 12h14"/>', down: '<path d="M6 9.5l6 6 6-6"/>',
@@ -428,34 +435,20 @@ function viewPlan() {
   <div class="meals">${meals}</div>`;
   v.querySelectorAll('.daychip').forEach(b => b.onclick = () => { const i = +b.dataset.day; if (i === S.ui.day) dayPassport(i); else { S.ui.day = i; save(); render(); } });
   const gc = $('#go-collect'); if (gc) gc.onclick = () => { S.ui.tab = 'collect'; save(); render(); };
-  v.querySelectorAll('[data-open]').forEach(b => b.onclick = () => { const k = b.dataset.open; S.ui.open[k] = !S.ui.open[k]; save(); render(); });
-  v.querySelectorAll('[data-status]').forEach(b => b.onclick = () => { const [d, i, st] = b.dataset.status.split(':'); const sl = S.plan.days[d].slots[i]; sl.status = sl.status === st ? null : st; save(); render(); });
+  v.querySelectorAll('[data-meal]').forEach(b => b.onclick = () => { const [d, i] = b.dataset.meal.split(':').map(Number); mealPage(d, i); });
   v.querySelectorAll('[data-replace]').forEach(b => b.onclick = () => { const [d, i] = b.dataset.replace.split(':').map(Number); replaceSlot(d, i); });
-  v.querySelectorAll('[data-more]').forEach(b => b.onclick = () => { const [d, i] = b.dataset.more.split(':').map(Number); dishDetails(d, i); });
-  v.querySelectorAll('[data-portions]').forEach(b => b.onclick = () => { const [d, i] = b.dataset.portions.split(':').map(Number); portionSheet(d, i); });
 }
 function mealCard(day, i, m) {
   const sl = S.plan.days[day].slots[i];
   if (!sl) return `<article class="meal empty-meal"><p class="mtype">${m[1]}</p><p>Не выбрано</p><button class="btn ghost" data-replace="${day}:${i}">Подобрать</button></article>`;
-  const d = sl.dish, ff = famFactor(d, i), n = nut(d, ff), key = day + '-' + i, open = S.ui.open[key];
-  const ti = todayIdx();
-  return `<article class="meal${open ? ' open' : ''}${sl.status ? ' st-' + sl.status : ''}">
-   <button class="mhead" data-open="${key}" aria-expanded="${!!open}">
+  const d = sl.dish, ff = famFactor(d, i), n = nut(d, ff);
+  return `<article class="meal${sl.status ? ' st-' + sl.status : ''}">
+   <button class="mhead" data-meal="${day}:${i}" aria-haspopup="dialog"><span class="mgo" aria-hidden="true">›</span>
      <span class="mtype">${m[1]}${sl.status === 'eaten' ? ' · съедено' : sl.status === 'skipped' ? ' · пропущено' : ''}</span>
      <span class="mname">${esc(d.name)}</span>
      <span class="macro">${kbju(n)}</span>
      <span class="meta"><span>${r0(n.g)} г на всех</span><span>${d.time} мин</span><span>сложность ${d.diff}/10</span></span>
    </button>
-   ${open ? `<div class="mbody">
-     <h4>Ингредиенты на всех</h4><ul class="ing">${d.ing.map(x => `<li><span>${esc(x.name)}</span><b>${fmtAmt(x, x.g * ff)}</b></li>`).join('')}${d.salt ? `<li><span>Соль йодированная</span><b>${r1(d.salt * ff)} г</b></li>` : ''}</ul>
-     <h4>Как готовить</h4><ol class="steps">${(d.steps || []).map(s => `<li>${esc(s)}</li>`).join('')}</ol>
-     <div class="actions">
-       <button class="btn ghost" data-portions="${day}:${i}">Порции по людям</button>
-       <button class="btn ghost" data-more="${day}:${i}">Подробнее</button>
-       <button class="btn ghost" data-replace="${day}:${i}">Заменить</button>
-     </div>
-     ${day <= ti ? `<div class="actions two"><button class="btn${sl.status === 'eaten' ? ' primary' : ' ghost'}" data-status="${day}:${i}:eaten">Съедено</button><button class="btn${sl.status === 'skipped' ? ' primary' : ' ghost'}" data-status="${day}:${i}:skipped">Пропущено</button></div>` : ''}
-   </div>` : ''}
   </article>`;
 }
 function replaceSlot(day, i) {
@@ -478,16 +471,28 @@ function portionSheet(day, i) {
   sheet(`<h3>Порции: ${esc(d.name)}</h3><p class="hint">Блюдо одно на всех, порции рассчитаны по нормам каждого.</p>
   <ul class="ing">${S.people.map((p, k) => `<li><span>${esc(p.name)}</span><b>${r0(fs[k] / tot * 100)}% · ${r0(base.g * fs[k])} г · ${r0(base.kcal * fs[k])} ккал</b></li>`).join('')}</ul>`);
 }
-function dishDetails(day, i) {
-  const d = S.plan.days[day].slots[i].dish, ff = famFactor(d, i), n = nut(d, ff), mn = familyMicro(), sh = pattern()[i][2] / 100;
+function mealPage(day, i) { // блюдо — отдельное полноэкранное окно
+  const sl = S.plan.days[day].slots[i]; if (!sl) return;
+  const d = sl.dish, m = pattern()[i], ff = famFactor(d, i), n = nut(d, ff), mn = familyMicro(), sh = m[2] / 100, ti = todayIdx();
   const tops = Object.keys(MICRO).filter(k => n[k] >= mn[k] * sh * 1.3).map(k => MICRO[k][0]);
   const flags = []; if (n.d < mn.d * sh * 0.5) flags.push('витамин D обычно трудно набрать едой — его стоит обсудить с врачом');
   if (S.settings.diet === 'vegan') flags.push('при веганском питании нужен B12 в виде добавки');
-  sheet(`<h3>${esc(d.name)}</h3><p class="hint">${d.src === 'ai' ? 'Подобрано нейросетью' : 'Из базы блюд приложения'} · ${esc(d.cuisine || '')} · ≈ ${r0(n.price / 10) * 10} ₽ на всех</p>
-  <div class="grid4"><div><b>${r0(n.kcal)}</b><span>ккал</span></div><div><b>${r0(n.p)}</b><span>белки, г</span></div><div><b>${r0(n.f)}</b><span>жиры, г</span></div><div><b>${r0(n.c)}</b><span>углеводы, г</span></div></div>
-  <p>Клетчатка ${r1(n.fib)} г · натрий ${r0(n.na)} мг</p>
-  ${tops.length ? `<p class="good">Богато: ${tops.join(', ')}</p>` : ''}
-  ${flags.length ? `<p class="hint">${flags.join('; ')}.</p>` : ''}`);
+  const dt = new Date(addDays(S.plan.start, day) + 'T12:00:00'), fs = slotFactor(d, i), tot = fs.reduce((a, b) => a + b, 0), base = nut(d);
+  sheet(`<p class="eyebrow">${m[1]} · ${DOW[dt.getDay()]}, ${dt.getDate()} ${MON[dt.getMonth()]}${sl.status === 'eaten' ? ' · съедено' : sl.status === 'skipped' ? ' · пропущено' : ''}</p>
+   <h2 class="pg-title">${esc(d.name)}</h2>
+   <div class="grid4"><div><b>${r0(n.kcal)}</b><span>ккал</span></div><div><b>${r0(n.p)}</b><span>белки, г</span></div><div><b>${r0(n.f)}</b><span>жиры, г</span></div><div><b>${r0(n.c)}</b><span>углеводы, г</span></div></div>
+   <div class="facts"><div><em>Готовка</em><b>${d.time} мин</b></div><div><em>Сложность</em><b>${d.diff} из 10</b></div><div><em>Клетчатка</em><b>${r1(n.fib)} г</b></div><div><em>Стоимость</em><b>≈ ${r0(n.price / 10) * 10} ₽</b></div></div>
+   ${S.marks.notes[d.id] ? `<p class="note">${ic('heart', 'sm')} ${esc(S.marks.notes[d.id])}</p>` : ''}
+   <h4>Ингредиенты на всех · ${r0(n.g)} г</h4><ul class="ing">${d.ing.map(x => `<li><span>${esc(x.name)}</span><b>${fmtAmt(x, x.g * ff)}</b></li>`).join('')}${d.salt ? `<li><span>Соль йодированная</span><b>${r1(d.salt * ff)} г</b></li>` : ''}</ul>
+   ${d.steps && d.steps.length ? `<h4>Как готовить</h4><ol class="steps">${d.steps.map(t => `<li>${esc(t)}</li>`).join('')}</ol>` : ''}
+   ${S.people.length > 1 ? `<h4>Порции по людям</h4><ul class="ing">${S.people.map((p, k) => `<li><span>${esc(p.name)}</span><b>${r0(base.g * fs[k])} г · ${r0(base.kcal * fs[k])} ккал</b></li>`).join('')}</ul>` : ''}
+   <h4>Польза</h4><p class="small">Натрий ${r0(n.na)} мг · ${d.src === 'ai' ? 'составлено нейросетью' : 'из базы блюд приложения'}</p>
+   ${tops.length ? `<p class="good">Богато: ${tops.join(', ')}</p>` : ''}${flags.length ? `<p class="hint">${flags.join('; ').replace(/^./, c => c.toUpperCase())}.</p>` : ''}
+   ${day <= ti ? `<div class="actions two"><button class="btn${sl.status === 'eaten' ? ' primary' : ' ghost'}" data-st="eaten">Съедено</button><button class="btn${sl.status === 'skipped' ? ' primary' : ' ghost'}" data-st="skipped">Пропущено</button></div>` : ''}
+   <button class="btn ghost wide" id="mp-replace">Заменить блюдо</button>`, b => {
+    b.querySelectorAll('[data-st]').forEach(x => x.onclick = () => { sl.status = sl.status === x.dataset.st ? null : x.dataset.st; save(); render(); mealPage(day, i); });
+    $('#mp-replace', b).onclick = () => replaceSlot(day, i);
+  }, {full: true});
 }
 function familyMicro() { const t = {}; Object.keys(MICRO).forEach(k => t[k] = 0); S.people.forEach(p => { const m = microNorm(p, S.settings.norms); Object.keys(t).forEach(k => t[k] += m[k]); }); return t; }
 function dayTotals(day) {
@@ -502,13 +507,15 @@ function dayPassport(day) {
   const ok = filled === all && Math.abs(t.kcal / fam.E - 1) <= 0.12 && t.p >= fam.P * 0.9 && t.na <= 2000 * S.people.length * 1.0;
   const own = [].concat(...S.plan.days.map(d => d.slots)).filter(Boolean), ownShare = own.filter(s => s.fromDesired || s.manual).length / Math.max(1, own.length);
   const dt = new Date(addDays(S.plan.start, day) + 'T12:00:00');
-  sheet(`<p class="eyebrow">Паспорт дня</p><h3>${DOW[dt.getDay()]}, ${dt.getDate()} ${MON[dt.getMonth()]}</h3>
+  sheet(`<p class="eyebrow">Паспорт дня</p><h2 class="pg-title">${DOW[dt.getDay()]}, ${dt.getDate()} ${MON[dt.getMonth()]}</h2>
   <div class="grid4"><div><b>${r0(t.kcal)}</b><span>ккал</span></div><div><b>${r0(t.p)}</b><span>белки, г</span></div><div><b>${r0(t.f)}</b><span>жиры, г</span></div><div><b>${r0(t.c)}</b><span>углеводы, г</span></div></div>
   <p>Клетчатка ${r0(t.fib)} г на всех</p>
   ${filled < all ? `<p class="warn">День собран не полностью: ${filled} из ${all} приёмов.</p>` : ok ? '<p class="good">Рацион дня сбалансирован</p>' : '<p class="hint">Небольшие отклонения от нормы выравниваются за неделю.</p>'}
   ${ownShare > 0.5 ? '<p class="warn">Больше половины блюд недели выбраны вручную — баланс может отличаться от нормы.</p>' : ''}
   ${tops.length ? `<p class="small">Сегодня особенно много: ${tops.join(', ')}</p>` : ''}
-  <details><summary>По людям</summary><ul class="ing">${S.people.map(p => { const x = personTargets(p); const sh = x.E / fam.E; return `<li><span>${esc(p.name)}</span><b>${r0(t.kcal * sh)} ккал · Б ${r0(t.p * sh)} г</b></li>`; }).join('')}</ul></details>`);
+  <h4>Приёмы дня</h4><ul class="ing">${pattern().map((m, i) => { const sl = S.plan.days[day].slots[i]; return `<li><span>${m[1]}${sl ? ' · ' + esc(sl.dish.name) : ''}</span><b>${sl ? r0(nut(sl.dish, famFactor(sl.dish, i)).kcal) + ' ккал' : '—'}</b></li>`; }).join('')}</ul>
+  <h4>По людям</h4><ul class="ing">${S.people.map(p => { const x = personTargets(p); const sh = x.E / fam.E; return `<li><span>${esc(p.name)}</span><b>${r0(t.kcal * sh)} ккал · Б ${r0(t.p * sh)} г</b></li>`; }).join('')}</ul>
+  <h4>Витамины и минералы на всех</h4><ul class="ing">${Object.keys(MICRO).map(k => `<li><span>${MICRO[k][0]}</span><b>${r0(t[k] / mn[k] * 100)}% нормы</b></li>`).join('')}</ul>`, null, {full: true});
 }
 
 /* ---------- Сбор рациона ---------- */
@@ -836,7 +843,7 @@ function viewSettings() {
     v.innerHTML = `${appbar('Настройки', 'Профиль и приложение', {back: true})}
     <button class="profile" data-person="${me.id}"><span class="mono">${esc(me.name.slice(0, 1).toUpperCase())}</span><span><b>${esc(me.name)}</b><small>${r0(t.E)} ккал · белок ${r0(t.P)} г в день</small></span>${ic('chev', 'sm')}</button>
     <nav class="rows">${SET_PAGES.map(([k, t, s]) => `<button class="row" data-set="${k}"><span class="medal">${ic(SET_IC[k])}</span><span><b>${t}</b><small>${s}</small></span>${ic('chev', 'sm')}</button>`).join('')}</nav>
-    <p class="hint center">Мой рацион · версия 0.5</p>`;
+    <p class="hint center">Мой рацион · версия 0.6</p>`;
     v.querySelectorAll('[data-set]').forEach(b => b.onclick = () => { S.ui.set = b.dataset.set; save(); render(); });
     v.querySelector('[data-person]').onclick = () => editPerson(me);
     return;

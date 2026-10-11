@@ -332,7 +332,24 @@ body.feeding { overflow: hidden; overscroll-behavior: none; }
   background: radial-gradient(120% 40% at 50% 0%, var(--gold-b), transparent 60%), var(--bg); border-top: 1px solid var(--gold-a); }
 .sheet-grip { display: flex; justify-content: space-between; align-items: center; }
 .sheet-grip::before { content: ""; width: 40px; height: 4px; border-radius: 4px; background: var(--gold-b); margin-left: calc(50% - 20px); }
-#sheet-body { overflow-y: auto; display: grid; gap: 12px; align-content: start; padding-bottom: 8px; }
+#sheet-body { overflow-y: auto; display: grid; gap: 12px; align-content: start; padding-bottom: 8px; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+body.sheeted { overflow: hidden; }
+.sheet-card { transition: transform .25s ease; }
+#sheet.full { align-items: stretch; background: var(--bg); backdrop-filter: none; -webkit-backdrop-filter: none; animation: pgin .26s cubic-bezier(.2, .8, .3, 1); }
+#sheet.full .sheet-card { max-height: none; height: 100%; border-radius: 0; border-top: 0; padding-top: calc(8px + env(safe-area-inset-top, 0px)); min-height: 0; }
+#sheet.full #sheet-body { min-height: 0; gap: 14px; padding-bottom: 28px; }
+#sheet.full #sheet-body h4 { margin-block: 14px 2px; }
+@keyframes pgin { from { transform: translateY(5%); opacity: 0; } }
+.pg-title { font-size: 1.75rem; line-height: 1.2; }
+#sheet-body .facts { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+#sheet-body .facts div { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; padding: 9px 12px; border-radius: 12px; border: 1px solid var(--line); }
+#sheet-body .facts em { font-style: normal; font-size: 0.8rem; color: var(--muted); }
+#sheet-body .facts b { font-size: 0.92rem; white-space: nowrap; }
+#sheet-body .note { color: var(--gold); font-size: 0.88rem; display: flex; gap: 6px; align-items: center; }
+.mhead { position: relative; }
+#sheet-body .ing li b { white-space: nowrap; }
+.mhead .mname { padding-right: 22px; }
+.mgo { position: absolute; right: 16px; top: 14px; font-size: 1.5rem; line-height: 1; color: var(--gold); opacity: .7; }
 .pick { display: grid; gap: 8px; }
 .pickrow { text-align: left; border-radius: 16px; background: var(--surface); border: 1px solid var(--line); padding: 12px 14px; display: grid; gap: 6px; }
 .pickrow b { font-family: var(--display); font-weight: 500; font-size: 1.05rem; }
