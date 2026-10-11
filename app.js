@@ -50,7 +50,7 @@ const defaults = () => ({
   lib: {}, banned: {ids: [], names: []}, cool: {}, seenEver: [], dishStore: {}, imports: [], taste: {w: {}, mode: 'self', done: false}, aiTimes: [], firstCollect: null,
   plan: null, feed: null, lastWeek: null,
   shop: {checked: {}, group: false, range: 'all'},
-  ui: {tab: 'plan', day: 0, open: {}, set: null}
+  ui: {tab: 'plan', day: 0, off: 0, open: {}, set: null}
 });
 let S;
 try { S = Object.assign(defaults(), JSON.parse(localStorage.getItem(KEY) || '{}')); } catch (e) { S = defaults(); }
@@ -64,12 +64,14 @@ try { S = Object.assign(defaults(), JSON.parse(localStorage.getItem(KEY) || '{}'
   Object.keys(S.lib || {}).forEach(k => { if (!k.startsWith('any|')) delete S.lib[k]; }); // круги по кухням больше не нужны
   if (S.feed && S.feed.seen && !S.feed.v4) S.feed = null;
 })();
+// при каждом открытии выбран сегодняшний день
+S.ui.off = 0; if (S.plan) S.ui.day = Math.max(0, Math.min(S.plan.len - 1, Math.round((new Date(new Date().setHours(12, 0, 0, 0)) - new Date(S.plan.start + 'T12:00:00')) / 864e5)));
 const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} };
 
 /* ---------- Даты ---------- */
 const DOW = ['Вс','Пн','Вт','Ср','Чт','Пт','Сб'];
 const MON = ['янв','фев','мар','апр','мая','июн','июл','авг','сен','окт','ноя','дек'];
-const iso = d => d.toISOString().slice(0, 10);
+const iso = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; // локальная дата
 const addDays = (s, n) => { const d = new Date(s + 'T12:00:00'); d.setDate(d.getDate() + n); return iso(d); };
 function cycleStart(len) {
   const t = new Date(); t.setHours(12, 0, 0, 0);
@@ -382,7 +384,7 @@ const kbju = n => `<span class="k"><b>${r0(n.kcal)}</b> ккал</span><span>Б 
 let lastView = '';
 function render() {
   applyTheme(); rollWeek();
-  const vk = (S.feed && S.feed.active) ? 'feed' : S.ui.tab + (S.ui.set || ''); if (vk !== lastView) { window.scrollTo(0, 0); lastView = vk; }
+  const vk = (S.feed && S.feed.active) ? 'feed' : S.ui.tab + (S.ui.set || ''); if (vk !== lastView) { const sc = $('#scroller'); if (sc) sc.scrollTop = 0; window.scrollTo(0, 0); lastView = vk; }
   document.querySelectorAll('.tab').forEach(b => b.setAttribute('aria-current', b.dataset.tab === S.ui.tab ? 'page' : 'false'));
   const v = $('#view');
   if (!S.onboarded || !S.people.length) { v.innerHTML = viewOnboard(); bindOnboard(); $('#nav').hidden = true; return; }
@@ -420,20 +422,23 @@ function bindOnboard() { $('#onb-go').onclick = () => { const p = readPerson(); 
 
 /* ---------- Рацион ---------- */
 function viewPlan() {
-  const v = $('#view');
-  if (!S.plan) { v.innerHTML = `${appbar('Рацион', 'Неделя со вторника')}<div class="empty"><p class="eyebrow">Рацион не собран</p><h3>Неделя начинается со вторника</h3><p>В понедельник закупаетесь, со вторника идёте по плану. Соберите рацион — блюда появятся здесь по дням.</p><button class="btn primary wide" id="go-collect">Собрать рацион</button></div>`; $('#go-collect').onclick = () => { S.ui.tab = 'collect'; save(); render(); }; return; }
-  const day = Math.min(S.ui.day, S.plan.len - 1), ti = todayIdx();
-  const strip = S.plan.days.map((d, i) => { const ds = addDays(S.plan.start, i), dt = new Date(ds + 'T12:00:00'), filled = d.slots.filter(Boolean).length;
-    return `<button class="daychip${i === day ? ' on' : ''}${i === ti ? ' today' : ''}" data-day="${i}"><span>${DOW[dt.getDay()]}</span><b>${dt.getDate()}</b><i>${filled ? filled + '/' + d.slots.length : '—'}</i></button>`; }).join('');
-  const dd = S.plan.days[day], pat = pattern();
-  const filled = dd.slots.some(Boolean);
-  const meals = filled ? pat.map((m, i) => mealCard(day, i, m)).join('') : `<div class="empty"><h3>На этот день блюд нет</h3><p>Соберите рацион, чтобы заполнить день.</p><button class="btn primary wide" id="go-collect">Собрать рацион</button></div>`;
-  const dt = new Date(addDays(S.plan.start, day) + 'T12:00:00');
+  const v = $('#view'), ti = todayIdx(), off = Math.max(0, Math.min(6, S.ui.off || 0));
+  const inPlan = k => S.plan && k >= 0 && k < S.plan.len;
+  const strip = Array.from({length: 7}, (_, j) => { const k = ti + j, ds = addDays(iso(new Date()), j), dt = new Date(ds + 'T12:00:00');
+    const d = inPlan(k) ? S.plan.days[k] : null, filled = d ? d.slots.filter(Boolean).length : 0;
+    return `<button class="daychip${j === off ? ' on' : ''}${j === 0 ? ' today' : ''}${filled ? '' : ' blank'}" data-off="${j}"><span>${DOW[dt.getDay()]}</span><b>${dt.getDate()}</b><i>${filled ? filled + '/' + d.slots.length : '—'}</i></button>`; }).join('');
+  const bindStrip = () => v.querySelectorAll('.daychip').forEach(b => b.onclick = () => { const j = +b.dataset.off, k = ti + j;
+    if (j === off && inPlan(k) && S.plan.days[k].slots.some(Boolean)) dayPassport(k); else { S.ui.off = j; if (inPlan(k)) S.ui.day = k; save(); render(); } });
+  const sdt = new Date(addDays(iso(new Date()), off) + 'T12:00:00'), dlabel = `${DOW[sdt.getDay()]}, ${sdt.getDate()} ${MON[sdt.getMonth()]}`;
+  if (!S.plan) { v.innerHTML = `${appbar('Рацион', 'Неделя со вторника')}<nav class="strip" aria-label="Дни">${strip}</nav><div class="empty"><p class="eyebrow">Рацион не собран</p><h3>Неделя начинается со вторника</h3><p>В понедельник закупаетесь, со вторника идёте по плану. Соберите рацион — блюда появятся здесь по дням.</p><button class="btn primary wide" id="go-collect">Собрать рацион</button></div>`; bindStrip(); $('#go-collect').onclick = () => { S.ui.tab = 'collect'; save(); render(); }; return; }
+  const day = ti + off, has = inPlan(day), pat = pattern();
+  const filled = has && S.plan.days[day].slots.some(Boolean);
+  const meals = filled ? pat.map((m, i) => mealCard(day, i, m)).join('') : `<div class="empty"><h3>На этот день блюд нет</h3><p>${has ? 'Соберите рацион, чтобы заполнить день.' : 'Этот день не входит в текущий рацион — он появится в следующем сборе.'}</p><button class="btn primary wide" id="go-collect">Собрать рацион</button></div>`;
   v.innerHTML = `${appbar('Рацион', `${S.plan.len} дн. · с ${new Date(S.plan.start + 'T12:00:00').getDate()} ${MON[new Date(S.plan.start + 'T12:00:00').getMonth()]}`)}
   <nav class="strip" aria-label="Дни">${strip}</nav>
-  <p class="dayhint">${DOW[dt.getDay()]}, ${dt.getDate()} ${MON[dt.getMonth()]} · нажмите на день ещё раз — откроется паспорт дня</p>
+  <p class="dayhint">${dlabel}${filled ? ' · нажмите на день ещё раз — откроется паспорт дня' : ''}</p>
   <div class="meals">${meals}</div>`;
-  v.querySelectorAll('.daychip').forEach(b => b.onclick = () => { const i = +b.dataset.day; if (i === S.ui.day) dayPassport(i); else { S.ui.day = i; save(); render(); } });
+  bindStrip();
   const gc = $('#go-collect'); if (gc) gc.onclick = () => { S.ui.tab = 'collect'; save(); render(); };
   v.querySelectorAll('[data-meal]').forEach(b => b.onclick = () => { const [d, i] = b.dataset.meal.split(':').map(Number); mealPage(d, i); });
   v.querySelectorAll('[data-replace]').forEach(b => b.onclick = () => { const [d, i] = b.dataset.replace.split(':').map(Number); replaceSlot(d, i); });
@@ -843,7 +848,7 @@ function viewSettings() {
     v.innerHTML = `${appbar('Настройки', 'Профиль и приложение', {back: true})}
     <button class="profile" data-person="${me.id}"><span class="mono">${esc(me.name.slice(0, 1).toUpperCase())}</span><span><b>${esc(me.name)}</b><small>${r0(t.E)} ккал · белок ${r0(t.P)} г в день</small></span>${ic('chev', 'sm')}</button>
     <nav class="rows">${SET_PAGES.map(([k, t, s]) => `<button class="row" data-set="${k}"><span class="medal">${ic(SET_IC[k])}</span><span><b>${t}</b><small>${s}</small></span>${ic('chev', 'sm')}</button>`).join('')}</nav>
-    <p class="hint center">Мой рацион · версия 0.6</p>`;
+    <p class="hint center">Мой рацион · версия 0.7</p>`;
     v.querySelectorAll('[data-set]').forEach(b => b.onclick = () => { S.ui.set = b.dataset.set; save(); render(); });
     v.querySelector('[data-person]').onclick = () => editPerson(me);
     return;
