@@ -44,12 +44,12 @@ function personTargets(p, goal) {
 const defaults = () => ({
   theme: 'dark', accent: 'gold', onboarded: false,
   people: [],
-  settings: {meals: 4, mealsAuto: false, planLen: 7, norms: 'NASEM', diet: 'all', forbidden: [], allergens: [], medical: {}, apiKey: '', accessKey: '', serverUrl: '', botUrl: ''},
+  settings: {meals: 4, mealsAuto: false, planLen: 7, norms: 'NASEM', diet: 'all', forbidden: [], allergens: [], medical: {}, accessKey: '', serverUrl: '', botUrl: ''},
   marks: {like: [], notes: {}},
   collect: {budget: 6000, sections: [0, 1], homeOn: false, home: [], cook2: false},
   lib: {}, banned: {ids: [], names: []}, cool: {}, seenEver: [], dishStore: {}, imports: [], taste: {w: {}, mode: 'self', done: false}, aiTimes: [], firstCollect: null,
-  plan: null, feed: null, lastWeek: null,
-  shop: {checked: {}, group: false, range: 'all'},
+  plan: null, feed: null, lastWeek: null, access: null, fbq: [], apiLog: null, pricesAt: 0, srvQueue: {},
+  shop: {checked: {}, group: false, range: 'all', bought: {}, lastBought: null},
   ui: {tab: 'plan', day: 0, off: 0, open: {}, set: null}
 });
 let S;
@@ -63,6 +63,7 @@ try { S = Object.assign(defaults(), JSON.parse(localStorage.getItem(KEY) || '{}'
   delete S.collect.section; delete S.collect.cuisine;
   Object.keys(S.lib || {}).forEach(k => { if (!k.startsWith('any|')) delete S.lib[k]; }); // круги по кухням больше не нужны
   if (S.feed && S.feed.seen && !S.feed.v4) S.feed = null;
+  delete S.settings.apiKey; delete S.lastSync;
 })();
 // при каждом открытии выбран сегодняшний день
 S.ui.off = 0; if (S.plan) S.ui.day = Math.max(0, Math.min(S.plan.len - 1, Math.round((new Date(new Date().setHours(12, 0, 0, 0)) - new Date(S.plan.start + 'T12:00:00')) / 864e5)));
@@ -73,13 +74,8 @@ const DOW = ['Вс','Пн','Вт','Ср','Чт','Пт','Сб'];
 const MON = ['янв','фев','мар','апр','мая','июн','июл','авг','сен','окт','ноя','дек'];
 const iso = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; // локальная дата
 const addDays = (s, n) => { const d = new Date(s + 'T12:00:00'); d.setDate(d.getDate() + n); return iso(d); };
-function cycleStart(len) {
-  const t = new Date(); t.setHours(12, 0, 0, 0);
-  if (len === 3) return iso(t);
-  const dow = t.getDay(); // 2 = вторник
-  if (dow === 1) { t.setDate(t.getDate() + 1); return iso(t); }
-  t.setDate(t.getDate() - ((dow - 2 + 7) % 7));
-  return iso(t);
+function cycleStart(len) { // рацион начинается с сегодняшнего дня
+  const t = new Date(); t.setHours(12, 0, 0, 0); return iso(t);
 }
 const todayIdx = () => S.plan ? Math.round((new Date(iso(new Date()) + 'T12:00:00') - new Date(S.plan.start + 'T12:00:00')) / 864e5) : 0;
 
@@ -101,14 +97,15 @@ function nut(dish, factor = 1) {
 }
 /* ---------- Справочники v4: кухни, разделы сложности, аллергены ---------- */
 const CUISINES = ['Русская', 'Средиземноморская', 'Европейская', 'Азиатская', 'Восточная'];
+const SEC_TIME = [['15', 'минут'], ['30', 'минут'], ['60', 'минут'], ['∞', 'шедевр']]; // подписи на кнопках сложности
 const SECTIONS = [['Простое', 'до 15 мин'], ['Среднее', 'до 30 мин'], ['Сложное', 'до часа'], ['Шедевр', 'любое время']];
-const sectionOf = d => d.time <= 15 && d.diff <= 2 ? 0 : d.time <= 30 && d.diff <= 5 ? 1 : d.time <= 60 && d.diff <= 7 ? 2 : 3;
+const sectionOf = d => d.section != null ? d.section : d.time <= 15 && d.diff <= 2 ? 0 : d.time <= 30 && d.diff <= 5 ? 1 : d.time <= 60 && d.diff <= 7 ? 2 : 3;
 const ALLERGENS = [['milk', 'Молоко (белок)'], ['lactose', 'Лактоза'], ['eggs', 'Яйца'], ['nuts', 'Орехи'], ['peanut', 'Арахис'], ['fish', 'Рыба'], ['seafood', 'Морепродукты'], ['gluten', 'Глютен'], ['soy', 'Соя'], ['sesame', 'Кунжут'], ['citrus', 'Цитрусы']];
 const ALG_ING = {milk: ['cottage', 'yogurt', 'kefir', 'milk', 'cheese', 'sourcream', 'butter'], lactose: ['cottage', 'yogurt', 'kefir', 'milk', 'sourcream'], eggs: ['eggs'], nuts: ['walnuts', 'almonds'], fish: ['salmon', 'mackerel', 'cod', 'tuna'], gluten: ['oat', 'bulgur', 'pasta', 'bread', 'lavash'], soy: ['tofu'], citrus: ['lemon', 'orange']};
 const ALG_RX = {milk: /молок|творог|йогурт|кефир|сыр|сметан|сливк|сливочн/i, lactose: /молок|творог|йогурт|кефир|сметан|сливк/i, eggs: /яйц|яич/i, nuts: /орех|миндал|фундук|кешью|фисташ|пекан/i, peanut: /арахис/i,
   fish: /рыб|лосос|сёмг|семг|скумбр|треск|тунец|судак|минтай|сельд|форел|горбуш/i, seafood: /кревет|кальмар|мидии|краб|морепрод|гребеш/i, gluten: /пшен|мука|хлеб|макарон|паста|булгур|лаваш|манк|ячмен|ржан|овсян|кускус/i,
   soy: /соя|соев|тофу/i, sesame: /кунжут|тахин/i, citrus: /лимон|апельсин|мандарин|грейпфрут|лайм/i};
-const hasAllergen = (d, a) => d.ing.some(i => (ALG_ING[a] || []).includes(i.id) || ALG_RX[a].test(i.name));
+const hasAllergen = (d, a) => Array.isArray(d.allergens) ? d.allergens.includes(a) || d.ing.some(i => (i.allergens || []).includes(a)) : d.ing.some(i => (ALG_ING[a] || []).includes(i.id) || ALG_RX[a].test(i.name));
 const nameKey = s => String(s || '').toLowerCase().replace(/ё/g, 'е').replace(/[^а-яa-z0-9]/g, '');
 const isBanned = d => S.banned.ids.includes(d.id) || S.banned.names.includes(nameKey(d.name));
 const dishFlags = d => d.ing.map(i => i.flags || '').join('');
@@ -118,7 +115,7 @@ function allowedByDiet(d) {
   if (diet === 'veg' && (/[mf]/.test(fl) || /куриц|говяд|свин|индейк|рыб/i.test(txt))) return false;
   if (diet === 'vegan' && (/[mfdeh]/.test(fl) || /куриц|говяд|свин|индейк|рыб|молок|сыр|яйц|мёд/i.test(txt))) return false;
   if (diet === 'pesc' && (/m/.test(fl) || /куриц|говяд|свин|индейк/i.test(txt))) return false;
-  if (diet === 'nopork' && /свин|бекон|ветчин|сало/i.test(txt)) return false;
+  if (diet === 'nopork' && (/p/.test(fl) || /свин|бекон|ветчин|сало/i.test(txt))) return false;
   if ((S.settings.allergens || []).some(a => hasAllergen(d, a))) return false;
   const bad = S.settings.forbidden.map(s => s.toLowerCase().trim()).filter(Boolean);
   if (bad.some(b => d.name.toLowerCase().includes(b) || d.ing.some(i => i.name.toLowerCase().includes(b)))) return false;
@@ -211,10 +208,26 @@ function newPlan() {
   S.plan = {start: cycleStart(len), len, meals, days: Array.from({length: len}, () => ({slots: Array(meals).fill(null)}))};
   S.feed = null; S.shop.checked = {};
 }
-function rollWeek() {
+function rollWeek() { // лента: рацион всегда на 7 дней с сегодняшнего, прошедшие дни уходят в историю
   if (!S.plan) return;
-  const end = addDays(S.plan.start, S.plan.len);
-  if (iso(new Date()) >= end) { S.lastWeek = S.plan; S.plan = null; S.feed = null; save(); }
+  const off = todayIdx(); if (!off) return;
+  const m = S.plan.meals, empty = () => ({slots: Array(m).fill(null)});
+  if (off < 0) { // рацион начинался позже сегодняшнего (старый цикл со вторника) — добавляем дни с сегодняшнего
+    const add = Math.min(-off, S.plan.len); S.plan.days = Array.from({length: add}, empty).concat(S.plan.days).slice(0, S.plan.len);
+    S.plan.start = iso(new Date(new Date().setHours(12, 0, 0, 0))); S.feed = null; S.ui.day = 0; S.ui.off = 0; save(); return; }
+  const past = S.plan.days.slice(0, Math.min(off, S.plan.len));
+  let H = S.lastWeek;
+  if (!H || H.meals !== m || !Array.isArray(H.days)) H = {start: S.plan.start, len: 0, meals: m, days: []};
+  else { const gap = Math.round((new Date(S.plan.start + 'T12:00:00') - new Date(addDays(H.start, H.days.length) + 'T12:00:00')) / 864e5);
+    if (gap < 0 || gap > 7) H = {start: S.plan.start, len: 0, meals: m, days: []}; else for (let k = 0; k < gap; k++) H.days.push(empty()); }
+  past.forEach(d => H.days.push(d));
+  const extra = Math.max(0, H.days.length - 7); if (extra) { H.days = H.days.slice(extra); H.start = addDays(H.start, extra); }
+  H.len = H.days.length; S.lastWeek = H;
+  const keep = S.plan.days.slice(off); while (keep.length < S.plan.len) keep.push(empty());
+  S.plan.days = keep; S.plan.start = iso(new Date(new Date().setHours(12, 0, 0, 0)));
+  S.feed = null; S.ui.day = 0; S.ui.off = 0;
+  const b = S.shop.bought || {}; Object.keys(b).forEach(k => { if (k < S.plan.start) delete b[k]; }); S.shop.bought = b;
+  save();
 }
 
 /* ---------- Подбор блюда: цели приёма и здоровье ---------- */
@@ -248,12 +261,22 @@ function healthOk(d, slotIdx, tg) {
   if (type !== 's' && n.p < tg.P * 0.45) return false;
   return true;
 }
-/* ---------- Бюджет по приёмам ---------- */
+/* ---------- Бюджет (ARCHITECTURE §5) ---------- */
 const BUDGET_SHARE = {3: {b: 28, l: 44, d: 28}, 4: {b: 25, l: 40, s: 10, d: 25}, 5: {b: 25, l: 40, s: 5, d: 25}};
+const famK = () => Math.max(0.5, S.people.reduce((s, p) => s + personTargets(p).E, 0) / 2000); // число «базовых людей»
+const dishCost = d => d.cost != null ? d.cost : nut(d).price; // цена базовой порции, ₽
+const famCost = d => dishCost(d) * famK(); // стоимость на семью
+const baseBudget = () => (+S.collect.budget || 0) / famK(); // бюджет на базового человека на период рациона
+function budgetLeft() { // остаток на базового человека: бюджет минус cost всех взятых блюд рациона
+  if (!S.plan) return baseBudget();
+  return baseBudget() - allSlots().reduce((s, sl) => s + dishCost(sl.dish), 0);
+}
+function mealsLeft() { const out = {}; if (!S.plan) return out; const pat = pattern(); S.plan.days.forEach(d => d.slots.forEach((sl, i) => { if (!sl) { const t = pat[i][0]; out[t] = (out[t] || 0) + 1; } })); return out; }
+const lowBudget = () => +S.collect.budget > 0 && baseBudget() / (S.settings.planLen || 7) * 7 < 2000;
 function slotBudget(slotIdx) { const t = pattern()[slotIdx][0]; return (+S.collect.budget || 0) / S.plan.len * (BUDGET_SHARE[S.plan.meals][t] || 10) / 100; }
 function budgetPenalty(d, slotIdx) {
   const lim = slotBudget(slotIdx); if (!lim) return 0;
-  const p = nut(d, famFactor(d, slotIdx)).price;
+  const p = famCost(d);
   return p > lim * 1.6 ? 99 : p > lim * 1.15 ? 0.25 : 0;
 }
 
@@ -288,19 +311,20 @@ function libRefuse(d, type) { // первый отказ: основной кр�
   S.cool[d.id] = Date.now() + 28 * 864e5; return 'cool';
 }
 function ban(d) {
+  if (!S.banned.ids.includes(d.id)) feedback(d, 'dislike');
   if (!S.banned.ids.includes(d.id)) S.banned.ids.push(d.id);
   const k = nameKey(d.name); if (!S.banned.names.includes(k)) S.banned.names.push(k);
   Object.values(S.lib).forEach(sys => Object.values(sys).forEach(L => { L.main = L.main.filter(x => x !== d.id); L.sec = L.sec.filter(x => x !== d.id); }));
   rememberDish(d);
 }
-function unban(id) { const d = getDish(id); S.banned.ids = S.banned.ids.filter(x => x !== id); if (d) S.banned.names = S.banned.names.filter(x => x !== nameKey(d.name)); }
+function unban(id) { const d = getDish(id); feedback(d, 'undislike'); S.banned.ids = S.banned.ids.filter(x => x !== id); if (d) S.banned.names = S.banned.names.filter(x => x !== nameKey(d.name)); }
 
 /* ---------- Подбор одной карточки ---------- */
 function fitsSlot(d, ctx, relaxed) {
   if (!d || !d.types.includes(ctx.type) || isBanned(d) || !allowedByDiet(d)) return false;
   if (usedInPlan(d.id) || ctx.seen.has(d.id)) return false;
   if (relaxed !== 'section' && !secs().includes(sectionOf(d))) return false;
-  if (budgetPenalty(d, ctx.slot) >= 99) return false;
+  if (d.src !== 'server' && budgetPenalty(d, ctx.slot) >= 99) return false; // цену новых блюд подбирает сервер по budget_left
   if (!safeFit(d, ctx.day, ctx.slot).ok) return false;
   return healthOk(d, ctx.slot, ctx.tg);
 }
@@ -321,10 +345,8 @@ function pickNewLocal(ctx, relaxed) {
   return rank(pool, ctx)[0] || null;
 }
 async function pickNew(ctx) {
-  let d = pickNewLocal(ctx);
-  if (d) return d;
-  if (canRemote()) { try { d = await remoteDish('find', ctx) || await remoteDish('generate', ctx); if (d && fitsSlot(d, ctx, true)) return d; } catch (e) { noteRemoteError(e); } }
-  return pickNewLocal(ctx, true) || pickNewLocal(ctx, 'section');
+  if (Server.on()) { const d = await serverNew(ctx); if (d) return d; }
+  return pickNewLocal(ctx) || pickNewLocal(ctx, true) || pickNewLocal(ctx, 'section');
 }
 async function nextCard() {
   const F = S.feed, key = F.day + '-' + F.slot, t0 = performance.now();
@@ -353,58 +375,120 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 function cardDelay() { const a = (S.aiTimes || []).slice(-20).sort((x, y) => x - y); const m = a.length ? a[a.length >> 1] : 1500; return Math.min(5000, Math.max(700, m)); }
 async function uniformDelay(t0) { const w = cardDelay() + (Math.random() - 0.5) * 500 - (performance.now() - t0); if (w > 0) await sleep(w); }
 
-/* ---------- Нейросеть и сервер ---------- */
-const GEMINI_MODELS = ['gemini-flash-latest', 'gemini-2.5-flash'];
-function systemPrompt() {
-  const w = S.taste.w, like = Object.keys(w).filter(k => w[k] > 0.1), dis = Object.keys(w).filter(k => w[k] < -0.1);
-  const alg = (S.settings.allergens || []).map(a => ALLERGENS.find(x => x[0] === a)[1]);
-  return 'Ты подбираешь одно классическое домашнее блюдо для семейного рациона: привычная еда без экзотики. Отвечай только JSON без пояснений: {"name":str,"time":мин,"diff":1-10,"cuisine":str,"steps":[до 5 шагов],"ingredients":[{"name":str,"g":граммы на одну базовую порцию,"kcal":на100г,"p":,"f":,"c":,"fib":,"cat":"Овощи и фрукты|Крупы и хлеб|Мясо и рыба|Молочное и яйца|Бобовые и орехи|Масла и соусы","price":руб за кг}]}. '
-    + 'Соблюдай цели приёма по белку, жирам, углеводам и клетчатке. Добавленный сахар не более 10 г на приём, соль не более 2 г на порцию, без трансжиров, колбас и сосисок. '
-    + (alg.length ? 'Аллергии в семье (исключить полностью): ' + alg.join(', ') + '. ' : '')
-    + (S.settings.forbidden.length ? 'Не использовать: ' + S.settings.forbidden.join(', ') + '. ' : '')
-    + (like.length ? 'Семья любит: ' + like.join(', ') + '. ' : '') + (dis.length ? 'Не любит: ' + dis.join(', ') + '. ' : '')
-    + (S.collect.homeOn && S.collect.home.length ? 'Дома есть: ' + S.collect.home.join(', ') + '.' : '');
+/* ---------- Сервер /v1 (API.md, с правками §9) ---------- */
+const DEV_KEY = 'moy-racion-device';
+function deviceId() { // id устройства: создаётся один раз и хранится отдельно от данных приложения
+  let id = null; try { id = localStorage.getItem(DEV_KEY); } catch (e) {}
+  if (!id) { id = (crypto.randomUUID ? crypto.randomUUID() : 'd' + Date.now().toString(36) + Math.random().toString(36).slice(2)); try { localStorage.setItem(DEV_KEY, id); } catch (e) {} }
+  return id;
 }
-function requestBody(ctx, extra = {}) {
-  const pat = pattern()[ctx.slot], tg = ctx.tg;
-  return Object.assign({meal: pat[1], type: pat[0], people: S.people.length, target_family: {kcal: r0(tg.E), protein_g: r0(tg.P), fat_g: r0(tg.F), carbs_g: r0(tg.C), fiber_g: r0(tg.fib)},
-    diet: S.settings.diet, sections: secs(), difficulty: secs().map(i => SECTIONS[i][0] + ' (' + SECTIONS[i][1] + ')').join(' или '), budget_rub: r0(slotBudget(ctx.slot))}, extra);
-}
-const canRemote = () => !!(S.settings.serverUrl || S.settings.apiKey);
-function noteRemoteError(e) { const F = S.feed; if (F && !F.aiWarned) { F.aiWarned = true; toast('Нейросеть недоступна: ' + e.message + '. Беру блюда из базы.'); } }
-function normalizeDish(o, type) {
-  if (!o || !o.name || !Array.isArray(o.ingredients || o.ing) || !(o.ingredients || o.ing).length) throw new Error('Неполный ответ');
-  const id = 'ai' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-  return {id, name: String(o.name), types: o.types || type, time: +o.time || 30, diff: Math.min(10, Math.max(1, +o.diff || 3)), cuisine: o.cuisine || '', steps: (o.steps || []).map(String).slice(0, 6), salt: 1, src: 'ai',
-    ing: (o.ingredients || o.ing).map((x, i) => ({id: 'x' + i + '_' + nameKey(x.name), name: String(x.name), cat: x.cat || 'Прочее', g: +x.g || 0, kcal: +x.kcal || 0, p: +x.p || 0, f: +x.f || 0, c: +x.c || 0, fib: +x.fib || 0, price: +x.price || 300, flags: '', unit: 'g'}))};
-}
-async function remoteDish(kind, ctx, extra) {
-  const st = S.settings, type = pattern()[ctx.slot][0], t0 = performance.now();
-  if (st.serverUrl) {
-    const r = await fetch(st.serverUrl.replace(/\/$/, '') + '/dish/' + kind, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({key: st.accessKey, seen: S.seenEver.slice(-300), banned: S.banned.names, allergens: st.allergens || [], req: requestBody(ctx, extra), system: systemPrompt()})});
-    if (!r.ok) throw new Error('сервер ' + r.status);
-    const j = await r.json(); if (!j.dish) return null;
-    if (kind === 'generate') S.aiTimes.push(performance.now() - t0);
-    const nd = normalizeDish(j.dish, type); if (j.dish.id) { nd.id = j.dish.id; nd.src = 'server'; } return nd;
+const API_MSG = {
+  no_key: 'Введите ключ доступа из Telegram-бота.',
+  key_not_found: 'Ключ не найден. Проверьте его или получите новый в Telegram-боте.',
+  expired: 'Подписка закончилась. Продлите её в Telegram-боте — собранный рацион остаётся с вами.',
+  device_mismatch: 'Ключ привязан к другому устройству. Отвяжите его в Telegram-боте командой /device и повторите.',
+  blocked: 'Ключ заблокирован. Напишите в Telegram-бот.',
+  exhausted: 'Подходящие блюда закончились — добавьте другое время готовки или смягчите запреты.',
+  ai_invalid: 'Не удалось составить блюдо. Попробуйте сформулировать иначе.',
+  ai_limit: 'Лимит нейросети на сегодня исчерпан. Новые блюда — из базы, завтра лимит обновится.',
+  rate_limited: 'Слишком много запросов. Подождите немного.',
+  ai_unavailable: 'Нейросеть сейчас недоступна, попробуйте позже.',
+  server_error: 'Ошибка сервера. Попробуйте позже.',
+  bad_request: 'Ошибка приложения: сервер не понял запрос.',
+  not_found: 'Ошибка приложения: неизвестный запрос.',
+  net: 'Нет связи с сервером. Проверьте интернет.'
+};
+const KEY_ERRORS = ['no_key', 'key_not_found', 'expired', 'device_mismatch', 'blocked'];
+class ApiError extends Error { constructor(code, msg, data) { super(msg || API_MSG[code] || API_MSG.server_error); this.code = code; this.data = data || {}; } }
+const Server = {
+  on: () => !!S.settings.serverUrl,
+  base: () => S.settings.serverUrl.trim().replace(/\/$/, ''),
+  async call(path, body, opts = {}) {
+    const keyed = opts.keyed !== false, t0 = performance.now();
+    if (keyed && path !== '/v1/feedback') await flushFeedback();
+    const req = keyed ? Object.assign({key: S.settings.accessKey, device: deviceId()}, body || {}) : body;
+    let res, j;
+    try {
+      res = await fetch(this.base() + path, opts.get ? {method: 'GET'} : {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(req)});
+      j = await res.json().catch(() => ({ok: false, error: 'server_error'}));
+    } catch (e) { logApi(path, req, {ok: false, error: 'net', message: e.message}, t0); throw new ApiError('net'); }
+    logApi(path, req, j, t0, res.status);
+    if (j && j.ok) return j;
+    const code = (j && j.error) || 'server_error';
+    if (code === 'rate_limited' && !opts.retried) { await sleep(Math.min(10, +j.retry_after || 2) * 1000); return this.call(path, body, Object.assign({}, opts, {retried: true})); }
+    if (KEY_ERRORS.includes(code)) S.access = Object.assign({}, S.access || {}, {error: code, until: j.until || (S.access && S.access.until), checkedAt: Date.now()});
+    throw new ApiError(code, (code in API_MSG && !['bad_request', 'not_found', 'server_error'].includes(code)) ? API_MSG[code] : (j && j.message) || API_MSG[code], j);
   }
-  if (kind !== 'generate' || !st.apiKey) return null;
-  let lastErr;
-  for (const model of GEMINI_MODELS) {
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(st.apiKey)}`, {method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({systemInstruction: {parts: [{text: systemPrompt()}]}, contents: [{role: 'user', parts: [{text: JSON.stringify(requestBody(ctx, extra))}]}], generationConfig: {temperature: 0.9, responseMimeType: 'application/json'}})});
-    if (res.status === 404) { lastErr = new Error('модель не найдена'); continue; }
-    if (!res.ok) throw new Error('ответ ' + res.status);
-    const j = await res.json(); const txt = j.candidates && j.candidates[0] && j.candidates[0].content.parts.map(p => p.text || '').join('');
-    S.aiTimes.push(performance.now() - t0); S.aiTimes = S.aiTimes.slice(-20);
-    return normalizeDish(JSON.parse(String(txt).replace(/^```json|```$/g, '').trim()), type);
-  }
-  throw lastErr || new Error('нет ответа');
+};
+function logApi(path, req, res, t0, status) { // последний запрос и ответ — для страницы «Системный» (без ключа)
+  const r = Object.assign({}, req || {}); if (r.key) r.key = '••••' + String(r.key).slice(-4);
+  const cut = JSON.stringify(res || {}); S.apiLog = {at: Date.now(), path, status: status || 0, ms: r0(performance.now() - t0), req: r, res: cut.length > 6000 ? JSON.parse(JSON.stringify(res, (k, v) => Array.isArray(v) && v.length > 3 ? v.slice(0, 3).concat(['…']) : v)) : res};
 }
-async function verifyAccess() { // одна проверка подписки при «Собрать рацион»
-  const st = S.settings; if (!st.serverUrl) return {ok: true, demo: true};
-  if (!st.accessKey) return {ok: false, reason: 'nokey'};
-  try { const r = await fetch(st.serverUrl.replace(/\/$/, '') + '/verify', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({key: st.accessKey})}); const j = await r.json(); return j.active ? {ok: true, until: j.until} : {ok: false, reason: j.reason || 'expired'}; }
-  catch (e) { return {ok: false, reason: 'net'}; }
+async function flushFeedback() { // отзывы копятся и уходят пачкой перед следующим запросом
+  if (!Server.on() || !S.settings.accessKey || !S.fbq.length || flushFeedback.busy) return;
+  flushFeedback.busy = true; const items = S.fbq.slice(0, 50);
+  try { await Server.call('/v1/feedback', {items}); S.fbq.splice(0, items.length); save(); } catch (e) {} finally { flushFeedback.busy = false; }
+}
+function feedback(d, action) { // только блюда общей базы сервера
+  if (!d || DBMAP[d.id] || d.src !== 'server') return;
+  S.fbq.push({dish: d.id, action}); if (S.fbq.length > 500) S.fbq.splice(0, S.fbq.length - 500);
+}
+async function checkKey(silent) { // POST /v1/key — при вводе ключа и перед сбором
+  if (!S.settings.accessKey) { S.access = {error: 'no_key', checkedAt: Date.now()}; save(); throw new ApiError('no_key'); }
+  const j = await Server.call('/v1/key', {});
+  S.access = {plan: j.plan, until: j.until, days_left: j.days_left, ai_left: j.ai_left_today, bound_now: !!j.bound_now, checkedAt: Date.now()};
+  if (j.tastes && Array.isArray(j.tastes.w)) S.taste.lvl = j.tastes.w;
+  save(); if (!silent && j.bound_now) toast('Ключ привязан к этому устройству');
+  return j;
+}
+const LEVELS = ['Классика', 'Необычное', 'Экзотика'];
+const DIET_API = {all: 'all', nopork: 'no_pork', pesc: 'pescatarian', veg: 'vegetarian', vegan: 'vegan'};
+const MICRO_KEYS = ['vc', 'va', 'ca', 'fe', 'mg', 'k', 'b12', 'd', 'fol', 'n3', 'na'];
+function fromApi(o) { // блюдо API.md §4 → внутренний формат (хранится в кэше целиком)
+  if (!o || !o.id || !o.name || !Array.isArray(o.ing) || !o.ing.length) throw new ApiError('bad_request', 'Неполное блюдо от сервера');
+  return {id: String(o.id), num: o.num, section: o.section, cuisine: LEVELS[o.cuisine] || '', lvl: o.cuisine, name: String(o.name), types: o.types || '', time: +o.time || 30, diff: +o.diff || 3, salt: +o.salt || 0,
+    steps: (o.steps || []).map(String), allergens: o.allergens || [], flags: o.flags || '', cost: o.base ? +o.base.cost : undefined, pclass: o.pclass, base: o.base, src: 'server', priceAt: Date.now(),
+    ing: o.ing.map(x => { const m = Array.isArray(x.micro) ? x.micro : []; const r = {id: x.id, name: x.name, cat: x.cat, unit: x.unit || 'g', pcs_g: x.pcs_g, price: +x.price || 0, kcal: +x.kcal || 0, p: +x.p || 0, f: +x.f || 0, c: +x.c || 0, fib: +x.fib || 0, flags: x.flags || '', allergens: x.allergens || [], g: +x.g || 0};
+      MICRO_KEYS.forEach((k, i) => r[k] = +m[i] || 0); return r; })};
+}
+function dishRequest(ctx, extra = {}) { // тело /v1/dish: только нормы и параметры, без имён и личных данных
+  const pat = pattern(), st = S.settings, ex = new Set();
+  allSlots().forEach(sl => ex.add(sl.dish.id)); (ctx.seen || []).forEach(id => ex.add(id));
+  return Object.assign({meal: pat[ctx.slot][0], sections: secs(), count: 1,
+    people: S.people.map((p, i) => { const t = personTargets(p); return {name: 'Человек ' + (i + 1), kcal: r0(t.E), p: r0(t.P), f: r0(t.F), c: r0(t.C), fib: r0(t.fib)}; }),
+    meal_share: pat[ctx.slot][2] / 100, budget_left: Math.max(0, r0(budgetLeft())), meals_left: mealsLeft(), meals_per_day: S.plan.meals,
+    allergies: st.allergens || [], diet: DIET_API[st.diet] || 'all', forbid: st.forbidden, exclude: [...ex].filter(id => !DBMAP[id]).slice(-300)}, extra);
+}
+async function fetchDishes(ctx, extra) {
+  const t0 = performance.now(), j = await Server.call('/v1/dish', dishRequest(ctx, extra));
+  if ((j.source || []).includes('ai')) { S.aiTimes.push(performance.now() - t0); S.aiTimes = S.aiTimes.slice(-20); }
+  if (S.access && j.ai_left_today != null) S.access.ai_left = j.ai_left_today;
+  const list = (j.dishes || []).map(fromApi); list.forEach(rememberDish);
+  if (j.short && S.feed && !S.feed.shortWarned) { S.feed.shortWarned = true; if (j.short === 'ai_limit') toast(API_MSG.ai_limit); }
+  return list;
+}
+async function serverNew(ctx) { // каждая 5-я карточка: новое блюдо с сервера; берём по 3 за запрос
+  const qk = ctx.type + '|' + secs().join(''), Q = S.srvQueue[qk] = (S.srvQueue[qk] || []).filter(id => getDish(id));
+  const fromQ = () => { while (Q.length) { const d = getDish(Q.shift()); if (fitsSlot(d, ctx, true)) return d; } return null; };
+  let d = fromQ(); if (d) return d;
+  try { (await fetchDishes(ctx, {count: 3})).forEach(x => Q.push(x.id)); d = fromQ(); }
+  catch (e) { noteServerError(e); }
+  return d;
+}
+function noteServerError(e) {
+  const F = S.feed; if (F && F.errWarned === e.code) return; if (F) F.errWarned = e.code;
+  toast(e.message + (KEY_ERRORS.includes(e.code) ? '' : ' Беру блюда из ваших кругов.'));
+}
+async function refreshPrices() { // раз в неделю: актуальные cost для блюд кругов
+  if (!Server.on() || !S.settings.accessKey || Date.now() - (S.pricesAt || 0) < 7 * 864e5) return;
+  const ids = [...new Set(Object.values(S.lib).flatMap(sys => Object.values(sys).flatMap(L => [...L.main, ...L.sec])))].filter(id => S.dishStore[id] && S.dishStore[id].src === 'server').slice(0, 300);
+  if (!ids.length) { S.pricesAt = Date.now(); save(); return; }
+  try {
+    const j = await Server.call('/v1/prices', {ids});
+    const upd = d => { const c = j.cost && j.cost[d.id]; if (c == null || !d.cost) return; const k = c / d.cost; d.ing.forEach(i => i.price = r1(i.price * k)); d.cost = c; d.priceAt = Date.now(); };
+    ids.forEach(id => upd(S.dishStore[id])); allSlots().forEach(sl => upd(sl.dish));
+    S.pricesAt = Date.now(); save();
+  } catch (e) {}
 }
 
 /* ---------- UI: общие ---------- */
@@ -454,7 +538,10 @@ function render() {
   if (!S.onboarded || !S.people.length) { v.innerHTML = viewOnboard(); bindOnboard(); $('#nav').hidden = true; return; }
   $('#nav').hidden = false;
   const feeding = !!(S.feed && S.feed.active); document.body.classList.toggle('feeding', feeding);
-  if (feeding) { v.innerHTML = viewFeed(); bindFeed(); $('#nav').hidden = true; return; }
+  if (feeding) { const old = $('#feedwrap');
+    if (old) { const t = document.createElement('div'); t.innerHTML = viewFeed(); const nw = t.firstElementChild; ['.ftop', '.slots', '.deck', '.fbtns'].forEach(q => { const a = old.querySelector(q), b = nw.querySelector(q); if (a && b) a.replaceWith(b); }); }
+    else v.innerHTML = viewFeed();
+    bindFeed(); $('#nav').hidden = true; return; }
   if (S.ui.tab === 'settings') $('#nav').hidden = true;
   ({plan: viewPlan, collect: viewCollect, shop: viewShop, settings: viewSettings})[S.ui.tab]();
 }
@@ -485,25 +572,47 @@ function viewOnboard() {
 function bindOnboard() { $('#onb-go').onclick = () => { const p = readPerson(); if (!p) return; S.people = [p]; S.onboarded = true; save(); render(); }; }
 
 /* ---------- Рацион ---------- */
+function pastDay(j) { // j < 0: прошедший день из истории (до 7 дней назад)
+  const H = S.lastWeek; if (!H || !H.days) return null;
+  const ds = addDays(iso(new Date()), j), k = Math.round((new Date(ds + 'T12:00:00') - new Date(H.start + 'T12:00:00')) / 864e5);
+  return k >= 0 && k < H.days.length ? {d: H.days[k], pat: PATTERNS[H.meals] || pattern()} : null;
+}
+let stripKeep = null; // положение ленты дней между перерисовками
 function viewPlan() {
-  const v = $('#view'), ti = todayIdx(), off = Math.max(0, Math.min(6, S.ui.off || 0));
+  const v = $('#view'), ti = todayIdx(), off = Math.max(-7, Math.min(6, S.ui.off || 0));
   const inPlan = k => S.plan && k >= 0 && k < S.plan.len;
-  const strip = Array.from({length: 7}, (_, j) => { const k = ti + j, ds = addDays(iso(new Date()), j), dt = new Date(ds + 'T12:00:00');
-    const d = inPlan(k) ? S.plan.days[k] : null, filled = d ? d.slots.filter(Boolean).length : 0;
-    return `<button class="daychip${j === off ? ' on' : ''}${j === 0 ? ' today' : ''}${filled ? '' : ' blank'}" data-off="${j}"><span>${DOW[dt.getDay()]}</span><b>${dt.getDate()}</b><i>${filled ? filled + '/' + d.slots.length : '—'}</i></button>`; }).join('');
-  const bindStrip = () => v.querySelectorAll('.daychip').forEach(b => b.onclick = () => { const j = +b.dataset.off, k = ti + j;
-    if (j === off && inPlan(k) && S.plan.days[k].slots.some(Boolean)) dayPassport(k); else { S.ui.off = j; if (inPlan(k)) S.ui.day = k; save(); render(); } });
+  const past = []; for (let j = -7; j < 0; j++) { const p = pastDay(j); if (p && p.d.slots.some(Boolean)) { past.push(j); } else if (past.length) past.push(j); }
+  const chip = j => { const ds = addDays(iso(new Date()), j), dt = new Date(ds + 'T12:00:00');
+    const d = j < 0 ? (pastDay(j) || {}).d : inPlan(ti + j) ? S.plan.days[ti + j] : null, filled = d ? d.slots.filter(Boolean).length : 0;
+    const cls = (j === off ? ' on' : '') + (j === 0 ? ' today' : '') + (j < 0 ? ' past' : '') + (d && filled === d.slots.length ? '' : ' blank');
+    return `<button class="daychip${cls}" data-off="${j}"><span>${DOW[dt.getDay()]}</span><b>${dt.getDate()}</b><i>${filled ? filled + '/' + d.slots.length : '—'}</i></button>`; };
+  const strip = past.concat([0, 1, 2, 3, 4, 5, 6]).map(chip).join('');
+  const placeStrip = () => { const st = v.querySelector('.strip'); if (!st) return;
+    if (stripKeep != null) st.scrollLeft = stripKeep; else { const t = st.querySelector('.daychip.today'); if (t) st.scrollLeft = t.offsetLeft - st.offsetLeft - 3; }
+    stripKeep = null; };
+  const bindStrip = () => { placeStrip(); v.querySelectorAll('.daychip').forEach(b => b.onclick = () => { const j = +b.dataset.off, k = ti + j;
+    if (j >= 0 && j === off && inPlan(k) && S.plan.days[k].slots.some(Boolean)) return dayPassport(k);
+    stripKeep = v.querySelector('.strip').scrollLeft; S.ui.off = j; if (inPlan(k)) S.ui.day = k; save(); render(); }); };
   const sdt = new Date(addDays(iso(new Date()), off) + 'T12:00:00'), dlabel = `${DOW[sdt.getDay()]}, ${sdt.getDate()} ${MON[sdt.getMonth()]}`;
-  if (!S.plan) { v.innerHTML = `${appbar('Рацион', 'Неделя со вторника')}<nav class="strip" aria-label="Дни">${strip}</nav><div class="empty"><p class="eyebrow">Рацион не собран</p><h3>Неделя начинается со вторника</h3><p>В понедельник закупаетесь, со вторника идёте по плану. Соберите рацион — блюда появятся здесь по дням.</p><button class="btn primary wide" id="go-collect">Собрать рацион</button></div>`; bindStrip(); $('#go-collect').onclick = () => { S.ui.tab = 'collect'; save(); render(); }; return; }
+  const goCollect = () => { S.ui.tab = 'collect'; save(); render(); };
+  if (off < 0) { // прошедший день — только просмотр
+    const p = pastDay(off), d = p && p.d;
+    const meals = d && d.slots.some(Boolean) ? p.pat.map((m, i) => { const sl = d.slots[i]; if (!sl) return `<article class="meal empty-meal past"><p class="mtype">${m[1]}</p><p>Не выбрано</p></article>`;
+      const n = nut(sl.dish); return `<article class="meal past"><div class="mhead"><span class="mtype">${m[1]}${sl.status === 'eaten' ? ' · съедено' : sl.status === 'skipped' ? ' · пропущено' : ''}</span><span class="mname">${esc(sl.dish.name)}</span><span class="macro">${kbju(n)}</span></div></article>`; }).join('')
+      : `<div class="empty"><h3>В этот день блюд не было</h3><p>Прошедшие дни показываются только для просмотра.</p></div>`;
+    v.innerHTML = `${appbar('Рацион', 'Прошедший день')}<nav class="strip" aria-label="Дни">${strip}</nav><p class="dayhint">${dlabel} · прошедший день, только просмотр</p><div class="meals">${meals}</div>`;
+    bindStrip(); return; }
+  if (!S.plan) { v.innerHTML = `${appbar('Рацион', 'С сегодняшнего дня')}<nav class="strip" aria-label="Дни">${strip}</nav><div class="empty"><p class="eyebrow">Рацион не собран</p><h3>Рацион на 7 дней с сегодняшнего</h3><p>Соберите рацион — блюда появятся здесь по дням, а список покупок — в «Продуктах».</p><button class="btn primary wide" id="go-collect">Собрать рацион</button></div>`; bindStrip(); $('#go-collect').onclick = goCollect; return; }
   const day = ti + off, has = inPlan(day), pat = pattern();
   const filled = has && S.plan.days[day].slots.some(Boolean);
   const meals = filled ? pat.map((m, i) => mealCard(day, i, m)).join('') : `<div class="empty"><h3>На этот день блюд нет</h3><p>${has ? 'Соберите рацион, чтобы заполнить день.' : 'Этот день не входит в текущий рацион — он появится в следующем сборе.'}</p><button class="btn primary wide" id="go-collect">Собрать рацион</button></div>`;
-  v.innerHTML = `${appbar('Рацион', `${S.plan.len} дн. · с ${new Date(S.plan.start + 'T12:00:00').getDate()} ${MON[new Date(S.plan.start + 'T12:00:00').getMonth()]}`)}
+  const end = new Date(addDays(S.plan.start, S.plan.len - 1) + 'T12:00:00');
+  v.innerHTML = `${appbar('Рацион', `${S.plan.len} дн. · по ${end.getDate()} ${MON[end.getMonth()]}`)}
   <nav class="strip" aria-label="Дни">${strip}</nav>
-  <p class="dayhint">${dlabel}${filled ? ' · нажмите на день ещё раз — откроется паспорт дня' : ''}</p>
+  <p class="dayhint">${dlabel}${off === 0 ? ' · сегодня' : ''}${filled ? ' · нажмите на день ещё раз — откроется паспорт дня' : ''}</p>
   <div class="meals">${meals}</div>`;
   bindStrip();
-  const gc = $('#go-collect'); if (gc) gc.onclick = () => { S.ui.tab = 'collect'; save(); render(); };
+  const gc = $('#go-collect'); if (gc) gc.onclick = goCollect;
   v.querySelectorAll('[data-meal]').forEach(b => b.onclick = () => { const [d, i] = b.dataset.meal.split(':').map(Number); mealPage(d, i); });
   v.querySelectorAll('[data-replace]').forEach(b => b.onclick = () => { const [d, i] = b.dataset.replace.split(':').map(Number); replaceSlot(d, i); });
 }
@@ -527,12 +636,12 @@ function replaceSlot(day, i) {
   const d = sl.dish, type = pattern()[i][0];
   sheet(`<p class="eyebrow">Замена блюда</p><h3>${esc(d.name)}</h3><p class="hint">Почему меняем? От этого зависит, вернётся ли блюдо в ваши круги.</p>
    <div class="actions"><button class="btn ghost" id="rp-today">Не сегодня</button><button class="btn ghost" id="rp-dis">Не нравится — убрать навсегда</button></div>`, b => {
-    const go = hard => { if (hard) ban(d); else libRefuse(d, type); S.plan.days[day].slots[i] = null; if (sl.leftover === undefined && S.plan.days[day + 1] && S.plan.days[day + 1].slots[i] && S.plan.days[day + 1].slots[i].leftover && S.plan.days[day + 1].slots[i].dish.id === d.id) S.plan.days[day + 1].slots[i] = null; save(); closeSheet(); startFeed(day, i, true); };
+    const go = hard => { if (hard) ban(d); else { feedback(d, 'skip'); libRefuse(d, type); } S.plan.days[day].slots[i] = null; if (sl.leftover === undefined && S.plan.days[day + 1] && S.plan.days[day + 1].slots[i] && S.plan.days[day + 1].slots[i].leftover && S.plan.days[day + 1].slots[i].dish.id === d.id) S.plan.days[day + 1].slots[i] = null; save(); closeSheet(); startFeed(day, i, true); };
     $('#rp-today', b).onclick = () => go(false); $('#rp-dis', b).onclick = () => go(true);
   });
 }
 function fmtAmt(i, g) {
-  if (i.unit === 'pcs') return Math.max(1, Math.round(g / 55)) + ' шт';
+  if (i.unit === 'pcs') return Math.max(1, Math.round(g / (i.pcs_g || 55))) + ' шт';
   if (i.unit === 'ml') return r0(g) + ' мл';
   return r0(g) + ' г';
 }
@@ -551,12 +660,12 @@ function mealPage(day, i) { // блюдо — отдельное полноэк�
   sheet(`<p class="eyebrow">${m[1]} · ${DOW[dt.getDay()]}, ${dt.getDate()} ${MON[dt.getMonth()]}${sl.status === 'eaten' ? ' · съедено' : sl.status === 'skipped' ? ' · пропущено' : ''}</p>
    <h2 class="pg-title">${esc(d.name)}</h2>
    <div class="grid4"><div><b>${r0(n.kcal)}</b><span>ккал</span></div><div><b>${r0(n.p)}</b><span>белки, г</span></div><div><b>${r0(n.f)}</b><span>жиры, г</span></div><div><b>${r0(n.c)}</b><span>углеводы, г</span></div></div>
-   <div class="facts"><div><em>Готовка</em><b>${d.time} мин</b></div><div><em>Сложность</em><b>${d.diff} из 10</b></div><div><em>Клетчатка</em><b>${r1(n.fib)} г</b></div><div><em>Стоимость</em><b>≈ ${r0(n.price / 10) * 10} ₽</b></div></div>
+   <div class="facts"><div><em>Готовка</em><b>${d.time} мин</b></div><div><em>Сложность</em><b>${d.diff} из 10</b></div><div><em>Клетчатка</em><b>${r1(n.fib)} г</b></div><div><em>Стоимость</em><b>≈ ${r0(famCost(d) / 10) * 10} ₽</b></div></div>
    ${S.marks.notes[d.id] ? `<p class="note">${ic('heart', 'sm')} ${esc(S.marks.notes[d.id])}</p>` : ''}
    <h4>Ингредиенты на всех · ${r0(n.g)} г</h4><ul class="ing">${d.ing.map(x => `<li><span>${esc(x.name)}</span><b>${fmtAmt(x, x.g * ff)}</b></li>`).join('')}${d.salt || d.saltOrig ? `<li><span>Соль йодированная${d.saltOrig != null ? ' · уменьшена' : ''}</span><b>${r1((d.salt || 0) * ff)} г</b></li>` : ''}</ul>
    ${d.steps && d.steps.length ? `<h4>Как готовить</h4><ol class="steps">${d.steps.map(t => `<li>${esc(t)}</li>`).join('')}</ol>` : ''}
    ${S.people.length > 1 ? `<h4>Порции по людям</h4><ul class="ing">${S.people.map((p, k) => `<li><span>${esc(p.name)}</span><b>${r0(base.g * fs[k])} г · ${r0(base.kcal * fs[k])} ккал</b></li>`).join('')}</ul>` : ''}
-   <h4>Польза</h4><p class="small">Натрий ${r0(n.na)} мг · ${d.src === 'ai' ? 'составлено нейросетью' : 'из базы блюд приложения'}</p>
+   <h4>Польза</h4><p class="small">Натрий ${r0(n.na)} мг · ${d.src === 'server' ? 'из общей базы блюд' : 'из встроенной базы'}</p>
    ${tops.length ? `<p class="good">Богато: ${tops.join(', ')}</p>` : ''}${flags.length ? `<p class="hint">${flags.join('; ').replace(/^./, c => c.toUpperCase())}.</p>` : ''}
    ${day <= ti ? `<div class="actions two"><button class="btn${sl.status === 'eaten' ? ' primary' : ' ghost'}" data-st="eaten">Съедено</button><button class="btn${sl.status === 'skipped' ? ' primary' : ' ghost'}" data-st="skipped">Пропущено</button></div>` : ''}
    <button class="btn ghost wide" id="mp-replace">Заменить блюдо</button>`, b => {
@@ -600,17 +709,18 @@ function dayPassport(day) {
 /* ---------- Сбор рациона ---------- */
 function viewCollect() {
   const c = S.collect, st = S.settings, med = Object.values(st.medical).some(Boolean);
-  const per = st.planLen === 7 ? 'неделю' : '3 дня';
+  const per = st.planLen === 7 ? '7 дней' : '3 дня';
   const started = S.plan && S.plan.days.some(d => d.slots.some(Boolean));
   const chipsList = (arr, attr) => arr.length ? `<div class="chips">${arr.map((w, i) => `<button class="chip x" data-${attr}="${i}">${esc(w)}</button>`).join('')}</div>` : '';
   const pat = PATTERNS[S.plan ? S.plan.meals : mealsCount()], len = S.plan ? S.plan.len : st.planLen, start = S.plan ? S.plan.start : cycleStart(len);
   const wishes = allSlots().filter(s => s.fromDesired && !s.leftover);
   const sys = S.plan ? libSummary() : '';
-  $('#view').innerHTML = `${appbar('Сбор рациона', st.planLen === 7 ? 'Неделя со вторника' : 'Рацион на 3 дня')}
+  $('#view').innerHTML = `${appbar('Сбор рациона', st.planLen === 7 ? '7 дней с сегодняшнего' : '3 дня с сегодняшнего')}
   ${med ? '<div class="warn box">Отмечено состояние здоровья, при котором автоматический рацион не подходит. Составьте питание вместе с врачом.</div>' : ''}
   <div class="panel">
-   <label class="field"><span><em>Бюджет на ${per}, ₽</em><input id="c-budget" type="number" inputmode="numeric" min="0" step="100" value="${c.budget}"></span></label>
-   <div class="field col"><em>Сложность · можно несколько</em><div class="secgrid">${SECTIONS.map(([t, s], i) => `<button class="secbtn${c.sections.includes(i) ? ' on' : ''}" data-sec="${i}" aria-pressed="${c.sections.includes(i)}"><i class="lv">${[0, 1, 2, 3].map(k => `<s${k <= i ? ' class="f"' : ''}></s>`).join('')}</i><b>${t}</b><small>${s}</small></button>`).join('')}</div></div>
+   <label class="field"><span><em>Бюджет семьи на ${per}, ₽</em><input id="c-budget" type="number" inputmode="numeric" min="0" step="100" value="${c.budget}"></span></label>
+   <p class="budgetnote${lowBudget() ? ' low' : ''}">${lowBudget() ? `≈ ${r0(baseBudget() / (st.planLen || 7) * 7 / 10) * 10} ₽ в неделю на взрослого — полноценный рацион в такой бюджет не уложится. Подберу самые экономные блюда.` : `≈ ${r0(baseBudget() / (st.planLen || 7) * 7 / 10) * 10} ₽ в неделю на взрослого${S.plan ? ` · осталось ≈ ${r0(Math.max(0, budgetLeft()) * famK() / 10) * 10} ₽` : ''}`}</p>
+   <div class="field col"><em>Время готовки · можно несколько</em><div class="secgrid">${SECTIONS.map(([t], i) => `<button class="secbtn${c.sections.includes(i) ? ' on' : ''}" data-sec="${i}" aria-pressed="${c.sections.includes(i)}" aria-label="${t}, ${SEC_TIME[i][1]}"><b>${SEC_TIME[i][0]}</b><small>${SEC_TIME[i][1]}</small></button>`).join('')}</div><small class="secnote">${c.sections.length ? c.sections.slice().sort().map(i => SECTIONS[i][0]).join(' · ') : 'Выберите хотя бы одно'}</small></div>
   </div>
   <div class="panel gap">
    <div class="field col"><em>Желаемое блюдо</em>
@@ -622,7 +732,7 @@ function viewCollect() {
    <div class="field switch">${ic('dish')}<span><em>Готовить на 2 дня</em><small>Обед и ужин — одной готовкой</small></span><button class="tog${c.cook2 ? ' on' : ''}" id="c-cook2" role="switch" aria-checked="${c.cook2}" aria-label="Готовить на 2 дня"><i></i></button></div>
   </div>
   ${sys}
-  ${S.plan ? '<button class="btn ghost wide reset" id="c-reset">Начать неделю заново</button>' : ''}
+  ${S.plan ? '<button class="btn ghost wide reset" id="c-reset">Начать рацион заново</button>' : ''}
   <div class="cta"><button class="btn primary wide big" id="c-go"${med ? ' disabled' : ''}>${ic('collect')}<span>${started ? 'Продолжить сбор' : 'Собрать рацион'}</span></button></div>`;
   const bindList = (inp, btn, arr) => { const add = () => { const x = $(inp).value.trim(); if (!x) return; arr.push(x); save(); render(); }; $(btn).onclick = add; $(inp).onkeydown = e => { if (e.key === 'Enter') add(); }; };
   $('#c-home-tog').onclick = () => { c.homeOn = !c.homeOn; save(); render(); };
@@ -630,12 +740,12 @@ function viewCollect() {
   document.querySelectorAll('[data-sec]').forEach(b => b.onclick = () => { const i = +b.dataset.sec, a = c.sections;
     if (a.includes(i)) { if (a.length === 1) { toast('Нужна хотя бы одна сложность'); return; } a.splice(a.indexOf(i), 1); } else a.push(i);
     a.sort(); save(); render(); });
-  $('#c-budget').onchange = e => { c.budget = +e.target.value || 0; save(); };
+  $('#c-budget').onchange = e => { c.budget = +e.target.value || 0; save(); render(); };
   $('#c-cook2').onclick = () => { c.cook2 = !c.cook2; save(); render(); };
   const wish = () => addDesired($('#c-wish').value.trim(), $('#c-wish-slot').value);
   $('#c-wish-add').onclick = wish; $('#c-wish').onkeydown = e => { if (e.key === 'Enter') wish(); };
   $('#c-go').onclick = startCollect;
-  const rs = $('#c-reset'); if (rs) rs.onclick = () => sheet(`<h3>Начать неделю заново?</h3><p>Все выбранные блюда этой недели будут удалены. Ваши круги блюд сохранятся.</p><div class="actions two"><button class="btn ghost" id="rs-no">Отмена</button><button class="btn primary" id="rs-yes">Удалить и начать</button></div>`, b => { $('#rs-no', b).onclick = closeSheet; $('#rs-yes', b).onclick = () => { S.plan = null; S.feed = null; save(); closeSheet(); render(); }; });
+  const rs = $('#c-reset'); if (rs) rs.onclick = () => sheet(`<h3>Начать рацион заново?</h3><p>Все выбранные блюда на эти дни будут удалены. Ваши круги блюд сохранятся.</p><div class="actions two"><button class="btn ghost" id="rs-no">Отмена</button><button class="btn primary" id="rs-yes">Удалить и начать</button></div>`, b => { $('#rs-no', b).onclick = closeSheet; $('#rs-yes', b).onclick = () => { S.plan = null; S.feed = null; save(); closeSheet(); render(); }; });
 }
 function libSummary() {
   const pat = pattern(), types = [...new Set(pat.map(m => m[0]))], names = {b: 'Завтраки', l: 'Обеды', d: 'Ужины', s: 'Перекусы'};
@@ -649,12 +759,12 @@ async function addDesired(name, type) {
   if (day < 0) { toast('Все приёмы этого типа уже заняты — замените блюдо в разделе «Рацион»'); return; }
   const ctx = {day, slot, type: pattern()[slot][0], tg: slotTarget(day, slot), seen: new Set()};
   const q = nameKey(name);
-  let d = Object.values(DBMAP).find(x => nameKey(x.name).includes(q) && allowedByDiet(x) && !isBanned(x));
-  if (!d && canRemote()) {
-    toast('Составляю блюдо…');
-    try { d = await remoteDish('generate', ctx, {wish: name}); } catch (e) { toast('Нейросеть недоступна: ' + e.message); return; }
-  }
-  if (!d) { toast('Такого блюда нет в базе. Чтобы его составила нейросеть, нужен ключ доступа.'); return; }
+  let d = null;
+  if (Server.on()) {
+    toast('Ищу блюдо…');
+    try { d = (await fetchDishes(ctx, {wish: name, count: 1}))[0] || null; } catch (e) { toast(e.message); if (KEY_ERRORS.includes(e.code)) accessSheet(e.code, () => addDesired(name, type)); return; }
+  } else d = Object.values(DBMAP).find(x => nameKey(x.name).includes(q) && allowedByDiet(x) && !isBanned(x));
+  if (!d) { toast(Server.on() ? 'Не удалось подобрать такое блюдо.' : 'Такого блюда нет во встроенной базе. Новые блюда — с сервером и ключом доступа.'); return; }
   if (!allowedByDiet(d)) { toast('В блюде есть то, что в семье исключено'); return; }
   const sf = safePlace(day, slot, d, {fromDesired: true});
   if (!sf.ok) { toast(`«${d.name}» не поставлено: ${SAFE_WHY[sf.why]}`); return; }
@@ -666,20 +776,21 @@ async function startCollect() {
   if (!S.plan) newPlan();
   const first = firstEmpty();
   if (!first) { S.ui.tab = 'plan'; save(); render(); toast('Рацион уже собран. Заменить блюдо можно в разделе «Рацион».'); return; }
-  const st = S.settings;
-  if (st.serverUrl) {
-    const v = await verifyAccess();
-    if (!v.ok) { accessSheet(v.reason, () => startCollect()); return; }
+  if (Server.on()) {
+    try { await checkKey(); }
+    catch (e) { if (e.code === 'net') toast('Нет связи с сервером — подбираю из ваших кругов.'); else { accessSheet(e.code, () => startCollect(), e.message); return; } }
   }
   S.firstCollect = S.firstCollect || iso(new Date());
   startFeed(first[0], first[1], false);
 }
-function accessSheet(reason, retry) {
+function accessSheet(code, retry, msg) {
   const st = S.settings, bot = st.botUrl || 'https://t.me/';
-  const txt = {nokey: ['Ключ доступа', 'Введите ключ, который выдал Telegram-бот после оплаты.'], expired: ['Подписка закончилась', 'Продлите подписку в Telegram-боте — собранная неделя остаётся доступной.'], notfound: ['Ключ не найден', 'Проверьте ключ или получите новый в Telegram-боте.'], net: ['Нужен интернет', 'Для начала сбора нужна сеть: проверяется подписка.']}[reason] || ['Нет доступа', 'Проверьте ключ.'];
-  sheet(`<div class="keyhead"><span class="medal big">${ic('key')}</span><div><p class="eyebrow">Перед сбором</p><h3>${txt[0]}</h3></div></div><p class="hint">${txt[1]}</p>
-   ${reason === 'net' ? '' : `<input id="k-key" type="password" autocomplete="off" value="${esc(st.accessKey)}" placeholder="Ключ из Telegram-бота">`}
-   <div class="actions two"><a class="btn ghost" href="${esc(bot)}" target="_blank" rel="noopener">Telegram-бот</a><button class="btn primary" id="k-go">${reason === 'net' ? 'Повторить' : 'Проверить'}</button></div>`, b => {
+  const title = {no_key: 'Ключ доступа', key_not_found: 'Ключ не найден', expired: 'Подписка закончилась', device_mismatch: 'Ключ на другом устройстве', blocked: 'Ключ заблокирован', net: 'Нет связи'}[code] || 'Нет доступа';
+  const showInput = ['no_key', 'key_not_found', 'blocked'].includes(code);
+  sheet(`<div class="keyhead"><span class="medal big">${ic('key')}</span><div><p class="eyebrow">Перед сбором</p><h3>${title}</h3></div></div><p class="hint">${esc(msg || API_MSG[code] || '')}</p>
+   ${code === 'device_mismatch' ? '<div class="box">Откройте Telegram-бота → отправьте команду /device (можно раз в сутки) → вернитесь и нажмите «Повторить».</div>' : ''}
+   ${showInput ? `<input id="k-key" type="password" autocomplete="off" value="${esc(st.accessKey)}" placeholder="Ключ из Telegram-бота" aria-label="Ключ доступа">` : ''}
+   <div class="actions two"><a class="btn ghost" href="${esc(bot)}" target="_blank" rel="noopener">Telegram-бот</a><button class="btn primary" id="k-go">${showInput ? 'Проверить' : 'Повторить'}</button></div>`, b => {
     $('#k-go', b).onclick = () => { const k = $('#k-key', b); if (k) st.accessKey = k.value.trim(); save(); closeSheet(); retry(); };
   });
 }
@@ -691,10 +802,10 @@ const CARD_LIMIT = 15;
 async function startFeed(day, slot, manual) {
   S.feed = Object.assign({v4: true, seen: {}, used: {}, counter: 0, homeQueue: []}, S.feed && S.feed.v4 ? S.feed : {}, {active: true, day, slot, manual, card: null, loading: true, exhausted: false, aiWarned: false});
   render();
-  if (S.collect.homeOn && S.collect.home.length && canRemote() && S.plan.homeFor !== S.collect.home.join('|')) {
+  if (S.collect.homeOn && S.collect.home.length && Server.on() && S.plan.homeFor !== S.collect.home.join('|')) {
     S.plan.homeFor = S.collect.home.join('|');
     for (const si of pattern().map((m, i) => i).filter(i => 'ld'.includes(pattern()[i][0])).slice(0, 2)) {
-      try { const ctx = {day: 0, slot: si, type: pattern()[si][0], tg: slotTarget(0, si), seen: new Set()}; const d = await remoteDish('generate', ctx, {home_products: S.collect.home, use_home: true}); if (d && allowedByDiet(d)) S.feed.homeQueue.push(d); } catch (e) { noteRemoteError(e); break; }
+      try { const ctx = {day: 0, slot: si, type: pattern()[si][0], tg: slotTarget(0, si), seen: S.feed.homeQueue.map(x => x.id)}; (await fetchDishes(ctx, {home: S.collect.home, count: 1})).forEach(d => { if (allowedByDiet(d)) S.feed.homeQueue.push(d); }); } catch (e) { noteServerError(e); break; }
     }
   }
   await nextCard(); S.feed.loading = false; render();
@@ -716,7 +827,7 @@ function cardHtml(d, m, slot) {
     <div class="dc-head"><div class="dc-tags"><span>${m[1]}</span><span>${sec}</span></div><h3 class="cname">${esc(d.name)}</h3></div></div>
    <div class="dc-body">
     <div class="grid4 kb"><div><b>${r0(n.kcal)}</b><span>ккал</span></div><div><b>${r0(n.p)}</b><span>белки, г</span></div><div><b>${r0(n.f)}</b><span>жиры, г</span></div><div><b>${r0(n.c)}</b><span>углев., г</span></div></div>
-    <div class="facts"><div><em>Готовка</em><b>${d.time} мин</b></div><div><em>Сложность</em><b>${d.diff} из 10</b></div><div><em>Клетчатка</em><b>${r1(n.fib)} г</b></div><div><em>Стоимость</em><b>≈ ${r0(n.price / 10) * 10} ₽</b></div></div>
+    <div class="facts"><div><em>Готовка</em><b>${d.time} мин</b></div><div><em>Сложность</em><b>${d.diff} из 10</b></div><div><em>Клетчатка</em><b>${r1(n.fib)} г</b></div><div><em>Стоимость</em><b>≈ ${r0(famCost(d) / 10) * 10} ₽</b></div></div>
     ${S.marks.notes[d.id] ? `<p class="note">${ic('heart', 'sm')} ${esc(S.marks.notes[d.id])}</p>` : ''}
     <div class="ingbox" id="ingbox"><p class="ingh">Ингредиенты · на ${S.people.length > 1 ? 'всю семью' : 'вас'}</p><ul class="ings">${ing}</ul>
      ${d.steps && d.steps.length ? `<p class="ingh">Как готовить</p><ol class="csteps">${d.steps.map(t => `<li>${esc(t)}</li>`).join('')}</ol>` : ''}</div>
@@ -814,7 +925,7 @@ function place(dish) {
   const r = safePlace(F.day, F.slot, dish, {manual: F.manual});
   if (!r.ok) { toast(`«${dish.name}» не подходит для этого дня: ${SAFE_WHY[r.why]}`); return false; }
   if (S.collect.cook2 && 'ld'.includes(pat[F.slot][0]) && F.day + 1 < S.plan.len && !S.plan.days[F.day + 1].slots[F.slot] && !safePlace(F.day + 1, F.slot, dish, {leftover: true}).ok) toast('На завтра блюдо не повторяю — день выйдет за предел соли или витаминов');
-  libTake(dish, pat[F.slot][0]);
+  libTake(dish, pat[F.slot][0]); feedback(dish, 'take');
   if (!S.seenEver.includes(dish.id)) S.seenEver.push(dish.id);
   toast(`${pat[F.slot][1]}: «${dish.name}»`);
 }
@@ -829,7 +940,7 @@ async function refuseCard(hard) {
   const F = S.feed, key = F.day + '-' + F.slot, d = F.card.dish, type = pattern()[F.slot][0];
   if (!S.seenEver.includes(d.id)) S.seenEver.push(d.id);
   if (hard) { ban(d); toast('Больше не предложу'); }
-  else { const r = libRefuse(d, type); if (r === 'ban') toast('Второй отказ — блюдо удалено из ваших'); }
+  else { feedback(d, 'skip'); const r = libRefuse(d, type); if (r === 'ban') toast('Второй отказ — блюдо удалено из ваших'); }
   F.used[key] = (F.used[key] || 0) + 1;
   if (F.used[key] >= CARD_LIMIT) { F.exhausted = true; F.card = null; save(); render(); return; }
   F.loading = true; F.card = null; save(); render(); await nextCard(); F.loading = false; render();
@@ -863,35 +974,66 @@ function roundAmt(i, g) {
   else { const h = Math.ceil(g / 500) * 500; q = (h - g) / g <= 0.3 ? h : Math.ceil(g / 100) * 100; }
   return {q, g: q, t: q >= 1000 ? (q / 1000).toString().replace('.', ',') + ' ' + u[1] : q + ' ' + u[0]};
 }
-function shopList() {
-  const r = S.shop.range, L = S.plan.len;
-  const [a, b] = r === 'a' ? [0, Math.min(3, L)] : r === 'b' ? [3, L] : [0, L];
+const MONG = ['января','февраля','марта','апреля','мая','июня','июля','августа','сентября','октября','ноября','декабря'];
+const dayDate = d => addDays(S.plan.start, d);
+const ruDays = n => n % 10 === 1 && n % 100 !== 11 ? 'день' : [2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100) ? 'дня' : 'дней';
+function fmtDates(idx, short) { // 12–14 октября · 30 сентября — 2 октября · 12, 13 и 15 октября
+  const ds = idx.map(d => new Date(dayDate(d) + 'T12:00:00')), M = short ? MON : MONG;
+  const run = idx.every((d, k) => !k || d === idx[k - 1] + 1);
+  const a = ds[0], z = ds[ds.length - 1];
+  if (ds.length === 1) return `${a.getDate()} ${M[a.getMonth()]}`;
+  if (run) return a.getMonth() === z.getMonth() ? `${a.getDate()}–${z.getDate()} ${M[z.getMonth()]}` : `${a.getDate()} ${M[a.getMonth()]} — ${z.getDate()} ${M[z.getMonth()]}`;
+  const sameM = ds.every(x => x.getMonth() === a.getMonth()), part = x => sameM ? x.getDate() : `${x.getDate()} ${M[x.getMonth()]}`;
+  return ds.slice(0, -1).map(part).join(', ') + ' и ' + part(z) + (sameM ? ' ' + M[a.getMonth()] : '');
+}
+function shopDays() { // собранные, но ещё не закупленные дни; при выборе половины — только она
+  const pend = S.plan.days.map((d, i) => i).filter(i => !S.shop.bought[dayDate(i)] && S.plan.days[i].slots.some(s => s && !s.leftover));
+  const split = pend.length > 4, r = split ? S.shop.range : 'all';
+  return {pend, split, sel: r === 'a' ? pend.slice(0, 3) : r === 'b' ? pend.slice(3) : pend};
+}
+function shopList(days) {
   const map = {}, home = S.collect.homeOn ? S.collect.home.map(x => x.toLowerCase()) : [];
-  for (let d = a; d < b; d++) S.plan.days[d].slots.forEach((sl, i) => { if (!sl || sl.leftover) return; const ff = famFactor(sl.dish, i);
-    sl.dish.ing.forEach(x => { const k = x.name; map[k] = map[k] || {i: x, g: 0}; map[k].g += x.g * ff; }); });
+  days.forEach(d => S.plan.days[d].slots.forEach((sl, i) => { if (!sl) return; const ff = famFactor(sl.dish, i);
+    sl.dish.ing.forEach(x => { const k = x.name; map[k] = map[k] || {i: x, g: 0}; map[k].g += x.g * ff; }); }));
   return Object.values(map).map(o => { const rd = roundAmt(o.i, o.g); const has = home.some(h => o.i.name.toLowerCase().includes(h) || h.includes(o.i.name.toLowerCase()));
     return {name: o.i.name, cat: o.i.cat, need: o.g, amt: rd.t, price: has ? 0 : (o.i.price || 0) * rd.g / 1000, has}; }).sort((x, y) => x.name.localeCompare(y.name, 'ru'));
 }
+function buyHead(sel) {
+  const run = sel.every((d, k) => !k || d === sel[k - 1] + 1), n = sel.length;
+  const title = n === 1 ? `Закупка на ${fmtDates(sel)}` : run ? `Закупка ${fmtDates(sel)}` : `Закупка на ${n} ${ruDays(n)}`;
+  const part = sel.filter(d => !S.plan.days[d].slots.every(Boolean));
+  const sub = [run || n === 1 ? (n === S.plan.len ? 'вся неделя' : `${n} ${ruDays(n)}`) : fmtDates(sel)];
+  if (part.length) sub.push(part.length === 1 ? `${fmtDates(part, true)} собран не полностью` : `не полностью: ${fmtDates(part, true)}`);
+  return `<section class="buycard"><h2 class="gt">${title}</h2><p class="buysub">${sub.join(' · ')}</p></section>`;
+}
 function viewShop() {
   const v = $('#view');
-  if (!S.plan || !S.plan.days.some(d => d.slots.some(Boolean))) { v.innerHTML = `${appbar('Продукты', 'Список покупок')}<div class="empty"><h3>Список пуст</h3><p>Список покупок появится, когда вы соберёте рацион.</p></div>`; return; }
-  const list = shopList(), total = list.reduce((s, x) => s + x.price, 0), budget = +S.collect.budget || 0;
-  const filledDays = S.plan.days.filter(d => d.slots.every(Boolean)).length;
-  const budgetPart = S.shop.range === 'all' ? budget : budget * (S.shop.range === 'a' ? 3 : S.plan.len - 3) / S.plan.len;
+  const goCollect = () => { S.ui.tab = 'collect'; save(); render(); };
+  const undo = S.shop.lastBought && S.shop.lastBought.some(k => S.shop.bought[k]) ? `<p class="buyundo">Закупка отмечена. <button class="linkbtn" id="s-undo">Вернуть</button></p>` : '';
+  const bindUndo = () => { const u = $('#s-undo'); if (u) u.onclick = () => { S.shop.lastBought.forEach(k => delete S.shop.bought[k]); S.shop.lastBought = null; save(); render(); }; };
+  if (!S.plan || !S.plan.days.some(d => d.slots.some(Boolean))) { v.innerHTML = `${appbar('Продукты', 'Список покупок')}<section class="buycard"><h2 class="gt">Закупка пока не собрана</h2><p class="buysub">Соберите рацион — здесь появится список продуктов на собранные дни</p><button class="btn primary" id="s-go">Собрать рацион</button></section>`; $('#s-go').onclick = goCollect; return; }
+  const {pend, split, sel} = shopDays();
+  if (!pend.length) { const bd = S.plan.days.map((d, i) => i).filter(i => S.shop.bought[dayDate(i)]);
+    v.innerHTML = `${appbar('Продукты', 'Список покупок')}<section class="buycard"><h2 class="gt">Всё собранное закуплено</h2><p class="buysub">${bd.length ? `Закуплено: ${fmtDates(bd)}. ` : ''}Соберите следующие дни — список появится здесь</p><button class="btn primary" id="s-go">Собрать рацион</button></section>${undo}`;
+    $('#s-go').onclick = goCollect; bindUndo(); return; }
+  const list = shopList(sel), total = sel.reduce((s, di) => s + S.plan.days[di].slots.reduce((a, sl) => a + (sl ? famCost(sl.dish) : 0), 0), 0), budget = +S.collect.budget || 0;
+  const budgetPart = budget * sel.length / S.plan.len;
   const over = budgetPart && total > budgetPart;
-  const ranges = S.plan.len === 7 ? [['all','Вся неделя'],['a','Дни 1–3'],['b','Дни 4–7']] : [['all','3 дня']];
+  const ranges = split ? [['all', 'Всё сразу'], ['a', fmtDates(pend.slice(0, 3), true)], ['b', fmtDates(pend.slice(3), true)]] : [];
   const row = x => `<li class="${S.shop.checked[x.name] ? 'done' : ''}${x.has ? ' has' : ''}"><button data-check="${esc(x.name)}"><span class="nm">${esc(x.name)}</span><span class="am">${x.has ? 'есть дома' : x.amt}</span><span class="pr">${x.has ? '' : '≈ ' + r0(x.price / 10) * 10 + ' ₽'}</span></button></li>`;
   let body;
   if (S.shop.group) { const cats = {}; list.forEach(x => (cats[x.cat] = cats[x.cat] || []).push(x)); body = Object.keys(cats).sort().map(k => `<h4 class="cat">${k}</h4><ul class="shop">${cats[k].map(row).join('')}</ul>`).join(''); }
   else body = `<ul class="shop">${list.map(row).join('')}</ul>`;
-  v.innerHTML = `${appbar('Продукты', `Собрано дней: ${filledDays} из ${S.plan.len}`)}
-  ${filledDays < S.plan.len ? `<div class="warn box">Рацион собран на ${filledDays} из ${S.plan.len} дней — продуктов хватит только на них.</div>` : ''}
-  <div class="seg">${ranges.map(([k, t]) => `<button class="${S.shop.range === k ? 'on' : ''}" data-range="${k}">${t}</button>`).join('')}</div>
+  v.innerHTML = `${appbar('Продукты', 'Список покупок')}
   <div class="total"><div><span class="small">Примерно</span><b>${r0(total / 10) * 10} ₽</b></div><div><span class="small">Бюджет</span><b>${r0(budgetPart)} ₽</b></div></div>
   ${over ? `<div class="warn box">Перерасход ≈ ${r0((total - budgetPart) / 10) * 10} ₽. <button class="btn ghost sm" id="s-cheap">Удешевить 5 самых дорогих блюд</button></div>` : ''}
+  ${buyHead(sel)}
+  ${split ? `<div class="seg">${ranges.map(([k, t]) => `<button class="${(S.shop.range || 'all') === k ? 'on' : ''}" data-range="${k}">${t}</button>`).join('')}</div>` : ''}
   <div class="actions two"><button class="btn ghost" id="s-group">${S.shop.group ? 'Без групп' : 'Сгруппировать'}</button><button class="btn ghost" id="s-share">Поделиться</button></div>
   ${body}
   <button class="btn primary wide big" id="s-copy">Скопировать список</button>
+  <button class="btn ghost wide" id="s-bought">Закуплено · ${fmtDates(sel, true)}</button>
+  ${undo}
   <p class="hint">Цены ориентировочные, по средним ценам сетевых магазинов. Нажмите на продукт, чтобы вычеркнуть.</p>`;
   v.querySelectorAll('[data-range]').forEach(b => b.onclick = () => { S.shop.range = b.dataset.range; save(); render(); });
   v.querySelectorAll('[data-check]').forEach(b => b.onclick = () => { const k = b.dataset.check; S.shop.checked[k] = !S.shop.checked[k]; save(); render(); });
@@ -901,21 +1043,26 @@ function viewShop() {
   $('#s-copy').onclick = copy;
   $('#s-share').onclick = async () => { if (navigator.share) { try { await navigator.share({title: 'Список покупок', text: text()}); return; } catch (e) { if (e.name === 'AbortError') return; } } copy(); };
   const ch = $('#s-cheap'); if (ch) ch.onclick = cheapen;
+  $('#s-bought').onclick = () => { const ks = sel.map(dayDate); ks.forEach(k => S.shop.bought[k] = true); S.shop.lastBought = ks; S.shop.checked = {}; S.shop.range = 'all'; save(); render(); const sc = $('#scroller'); if (sc) sc.scrollTop = 0; toast(`Закуплено: ${fmtDates(sel, true)}`); };
+  bindUndo();
 }
 function cheapen() {
   const slots = [];
-  S.plan.days.forEach((d, di) => d.slots.forEach((sl, i) => { if (sl && !sl.fromDesired) slots.push({di, i, price: nut(sl.dish, famFactor(sl.dish, i)).price}); }));
+  const sel = shopDays().sel;
+  sel.forEach(di => S.plan.days[di].slots.forEach((sl, i) => { if (sl && !sl.fromDesired && !sl.leftover) slots.push({di, i, price: famCost(sl.dish)}); }));
   slots.sort((a, b) => b.price - a.price);
   let n = 0;
   slots.slice(0, 5).forEach(s => { const type = pattern()[s.i][0], cur = S.plan.days[s.di].slots[s.i];
-    const alt = Object.values(DBMAP).filter(d => d.types.includes(type) && allowedByDiet(d) && !isBanned(d) && d.id !== cur.dish.id && !usedInPlan(d.id))
-      .map(d => ({d, p: nut(d, famFactor(d, s.i)).price})).filter(x => x.p < s.price * 0.8 && safeFit(x.d, s.di, s.i).ok).sort((a, b) => a.p - b.p)[0];
-    if (alt) { S.plan.days[s.di].slots[s.i] = {dish: withSalt(alt.d, safeFit(alt.d, s.di, s.i).salt), status: null, fromDesired: false}; n++; } });
+    const alt = (Server.on() ? Object.values(S.dishStore).filter(x => x.src === 'server') : Object.values(DBMAP)).filter(d => d.types.includes(type) && allowedByDiet(d) && !isBanned(d) && d.id !== cur.dish.id && !usedInPlan(d.id))
+      .map(d => ({d, p: famCost(d)})).filter(x => x.p < s.price * 0.8 && safeFit(x.d, s.di, s.i).ok).sort((a, b) => a.p - b.p)[0];
+    if (alt) { const nx = S.plan.days[s.di + 1], lo = nx && nx.slots[s.i];
+      if (lo && lo.leftover && lo.dish.id === cur.dish.id) nx.slots[s.i] = {dish: alt.d, status: null, leftover: true};
+      S.plan.days[s.di].slots[s.i] = {dish: withSalt(alt.d, safeFit(alt.d, s.di, s.i).salt), status: null, fromDesired: false}; n++; } });
   save(); render(); toast(n ? `Заменено блюд: ${n}` : 'Дешевле подходящих блюд не нашлось');
 }
 
 /* ---------- Настройки ---------- */
-const SET_PAGES = [['look','Оформление','Тема и акцент'],['family','Семья','Люди и их нормы'],['tastes','Мои вкусы','Тест, круги блюд, пометки, обмен'],['diet','Рацион и питание','Приёмы, тип питания, аллергии'],['health','Здоровье','Важное предупреждение'],['key','Ключ доступа','Подписка'],['history','История','Прошлая неделя'],['data','Данные','Удаление с устройства'],['system','Системный','Промпт для нейросети · в разработке']];
+const SET_PAGES = [['look','Оформление','Тема и акцент'],['family','Семья','Люди и их нормы'],['tastes','Мои вкусы','Тест, круги блюд, пометки, обмен'],['diet','Рацион и питание','Приёмы, тип питания, аллергии'],['health','Здоровье','Важное предупреждение'],['key','Ключ доступа','Подписка'],['history','История','Прошедшие 7 дней'],['data','Данные','Удаление с устройства'],['system','Системный','Последний запрос к серверу']];
 const SET_IC = {look:'look', family:'family', diet:'dish', tastes:'heart', health:'shield', key:'key', history:'history', data:'data', system:'code'};
 function viewSettings() {
   const st = S.settings, M = S.marks, pg = S.ui.set, v = $('#view');
@@ -924,7 +1071,7 @@ function viewSettings() {
     v.innerHTML = `${appbar('Настройки', 'Профиль и приложение', {back: true})}
     <button class="profile" data-person="${me.id}"><span class="mono">${esc(me.name.slice(0, 1).toUpperCase())}</span><span><b>${esc(me.name)}</b><small>${r0(t.E)} ккал · белок ${r0(t.P)} г в день</small></span>${ic('chev', 'sm')}</button>
     <nav class="rows">${SET_PAGES.map(([k, t, s]) => `<button class="row" data-set="${k}"><span class="medal">${ic(SET_IC[k])}</span><span><b>${t}</b><small>${s}</small></span>${ic('chev', 'sm')}</button>`).join('')}</nav>
-    <p class="hint center">Мой рацион · версия 0.7.1</p>`;
+    <p class="hint center">Мой рацион · версия 0.8</p>`;
     v.querySelectorAll('[data-set]').forEach(b => b.onclick = () => { S.ui.set = b.dataset.set; save(); render(); });
     v.querySelector('[data-person]').onclick = () => editPerson(me);
     return;
@@ -948,26 +1095,19 @@ function viewSettings() {
   if (pg === 'health') body = `<div class="alert">${ic('shield')}<div><b>Важно</b><p>Приложение опирается на официальные нормы питания и подробный научный отчёт, но не заменяет врача и не гарантирует результат. При состояниях из списка ниже им лучше не пользоваться — посоветуйтесь с врачом или диетологом.</p></div></div>
     <h4>Состояния</h4><div class="panel">${meds.map(([k, t]) => `<label class="field check"><input type="checkbox" data-med="${k}"${st.medical[k] ? ' checked' : ''}><span>${t}</span></label>`).join('')}</div>
     <p class="hint">Если отметить хотя бы одно, автоматический сбор рациона отключится.</p>`;
-  if (pg === 'key') body = `<div class="panel"><label class="field"><span><em>Ключ доступа</em><input id="st-acc" type="password" autocomplete="off" value="${esc(st.accessKey)}" placeholder="Ключ из Telegram-бота"></span></label></div>
-    <p class="hint">Подписка проверяется один раз — когда вы нажимаете «Собрать рацион». Собранная неделя работает без проверок.</p>
-    <h4>Для разработчика</h4><div class="panel"><label class="field"><span><em>Адрес сервера (Cloudflare Worker)</em><input id="st-srv" autocomplete="off" value="${esc(st.serverUrl)}" placeholder="https://….workers.dev"></span></label>
-    <label class="field"><span><em>Ссылка на Telegram-бота</em><input id="st-bot" autocomplete="off" value="${esc(st.botUrl)}" placeholder="https://t.me/…"></span></label>
-    <label class="field"><span><em>Ключ Gemini (тест без сервера)</em><input id="st-key" type="password" autocomplete="off" value="${esc(st.apiKey)}" placeholder="Только для проверки"></span></label></div>
-    <p class="hint">Пока сервер не подключён, приложение работает на базе блюд в телефоне. Ключ Gemini здесь — временный способ проверить нейросеть: в рабочей версии он хранится только на сервере.</p>`;
-  if (pg === 'history') body = S.lastWeek ? historyHtml() : '<div class="empty"><h3>Истории пока нет</h3><p>Прошлая неделя появится здесь после окончания текущей.</p></div>';
+  if (pg === 'key') body = keyPageHtml();
+  if (pg === 'history') body = S.lastWeek ? historyHtml() : '<div class="empty"><h3>Истории пока нет</h3><p>Прошедшие дни рациона появятся здесь — за последние 7 дней.</p></div>';
   if (pg === 'system') {
-    let sample;
-    try {
-      if (!S.plan) newPlan();
-      const day = Math.min(S.ui.day, S.plan.len - 1), slot = 0;
-      sample = requestBody({day, slot, tg: slotTarget(day, slot)}, {});
-    } catch (e) { sample = {error: e.message}; }
-    const L = curSystems().join(', ');
-    body = `<div class="alert">${ic('code')}<div><b>Только для разработчика</b><p>Здесь видно, куда и что приложение отправляет. Нейросеть вызывается редко: желаемое блюдо, продукты дома и когда в базе кончились свежие блюда.</p></div></div>
-    <h4>Куда уходит запрос</h4><div class="panel"><div class="field col"><em>Режим</em><code class="mono-t">${st.serverUrl ? 'сервер: ' + esc(st.serverUrl) : st.apiKey ? 'напрямую в Gemini (тест)' : 'только база в телефоне'}</code></div><div class="field col"><em>Модели Gemini</em><code class="mono-t">${GEMINI_MODELS.join(' → ')}</code></div><div class="field col"><em>Задержка карточки</em><code class="mono-t">${cardDelay()} мс · медиана последних ответов нейросети</code></div><div class="field col"><em>База в телефоне</em><code class="mono-t">${Object.keys(DBMAP).length} блюд · своих ${Object.keys(S.dishStore).length} · удалено ${S.banned.ids.length}</code></div><div class="field col"><em>Выбранные круги</em><code class="mono-t">${esc(L)}</code></div></div>
-    <h4>Системный промпт</h4><pre class="code">${esc(systemPrompt())}</pre>
-    <h4>Запрос · пример для первого приёма</h4><pre class="code">${esc(JSON.stringify(sample, null, 2))}</pre>
-    <button class="btn ghost wide" id="sys-copy">Скопировать промпт и пример</button>`;
+    const L = S.apiLog;
+    body = `<div class="alert">${ic('code')}<div><b>Только для разработчика</b><p>Подбор новых блюд, нейросеть и цены — на сервере. Здесь видно последний запрос к серверу и его ответ. Ключ скрыт.</p></div></div>
+    <h4>Состояние</h4><div class="panel"><div class="field col"><em>Сервер</em><code class="mono-t">${st.serverUrl ? esc(st.serverUrl) : 'не задан — сбор из кругов и встроенных демо-блюд'}</code></div>
+    <div class="field col"><em>Устройство</em><code class="mono-t">${esc(deviceId())}</code></div>
+    <div class="field col"><em>Отзывы в очереди</em><code class="mono-t">${S.fbq.length}</code></div>
+    <div class="field col"><em>Задержка карточки</em><code class="mono-t">${cardDelay()} мс · одинаковая для всех карточек</code></div>
+    <div class="field col"><em>Кэш блюд</em><code class="mono-t">встроенных ${Object.keys(DBMAP).length} · с сервера ${Object.values(S.dishStore).filter(d => d.src === 'server').length} · цены обновлены ${S.pricesAt ? new Date(S.pricesAt).toLocaleDateString('ru-RU') : 'ещё нет'}</code></div>
+    <div class="field col"><em>Бюджет</em><code class="mono-t">K = ${r1(famK())} · на базового человека ${r0(baseBudget())} ₽ · остаток ${r0(budgetLeft())} ₽</code></div></div>
+    ${L ? `<h4>Запрос · ${esc(L.path)} · ${new Date(L.at).toLocaleTimeString('ru-RU')} · ${L.status || 'нет связи'} · ${L.ms} мс</h4><pre class="code">${esc(JSON.stringify(L.req, null, 2))}</pre><h4>Ответ</h4><pre class="code">${esc(JSON.stringify(L.res, null, 2))}</pre>
+    <button class="btn ghost wide" id="sys-copy">Скопировать запрос и ответ</button>` : '<div class="empty"><h3>Запросов ещё не было</h3><p>Они появятся после проверки ключа или подбора нового блюда.</p></div>'}`;
   }
   if (pg === 'data') body = `<p class="hint">Все данные хранятся только на этом устройстве.</p><button class="btn ghost wide danger" id="st-wipe">Удалить все данные</button>`;
   v.innerHTML = `${appbar(title, 'Настройки', {back: true})}${body}`;
@@ -979,8 +1119,8 @@ function viewSettings() {
   on('#st-meals', 'onchange', e => { if (e.target.value === 'auto') st.mealsAuto = true; else { st.mealsAuto = false; st.meals = +e.target.value; } planShapeChanged(); });
   v.querySelectorAll('[data-len]').forEach(b => b.onclick = () => { st.planLen = +b.dataset.len; planShapeChanged(); });
   v.querySelectorAll('[data-alg]').forEach(b => b.onchange = () => { const k = b.dataset.alg, a = st.allergens = st.allergens || []; b.checked ? a.includes(k) || a.push(k) : a.splice(a.indexOf(k), 1); save(); });
-  on('#st-acc', 'onchange', e => { st.accessKey = e.target.value.trim(); save(); });
-  on('#st-srv', 'onchange', e => { st.serverUrl = e.target.value.trim(); save(); });
+  on('#st-acc-check', 'onclick', async () => { st.accessKey = $('#st-acc').value.trim(); save(); if (!Server.on()) { toast('Ключ сохранён. Проверка — когда будет подключён сервер.'); render(); return; } try { await checkKey(); toast('Ключ действует'); } catch (e) { toast(e.message); } render(); });
+  on('#st-srv', 'onchange', e => { st.serverUrl = e.target.value.trim(); S.access = null; save(); render(); });
   on('#st-bot', 'onchange', e => { st.botUrl = e.target.value.trim(); save(); });
   if (pg === 'tastes') bindTastes(v);
   on('#st-diet', 'onchange', e => { st.diet = e.target.value; save(); });
@@ -989,9 +1129,22 @@ function viewSettings() {
   on('#st-forb-add', 'onclick', fa); on('#st-forb', 'onkeydown', e => { if (e.key === 'Enter') fa(); });
   v.querySelectorAll('[data-rmforb]').forEach(b => b.onclick = () => { st.forbidden.splice(+b.dataset.rmforb, 1); save(); render(); });
   v.querySelectorAll('[data-med]').forEach(b => b.onchange = () => { st.medical[b.dataset.med] = b.checked; save(); });
-  on('#st-key', 'onchange', e => { st.apiKey = e.target.value.trim(); save(); });
   on('#sys-copy', 'onclick', async () => { const t = Array.from(v.querySelectorAll('pre.code')).map(x => x.textContent).join('\n\n'); try { await navigator.clipboard.writeText(t); toast('Скопировано'); } catch (e) { toast('Не удалось скопировать'); } });
   on('#st-wipe', 'onclick', () => sheet(`<h3>Удалить все данные?</h3><p>Профили, рацион, пометки и ключ будут удалены с этого устройства.</p><div class="actions two"><button class="btn ghost" id="w-no">Отмена</button><button class="btn primary" id="w-yes">Удалить</button></div>`, b => { $('#w-no', b).onclick = closeSheet; $('#w-yes', b).onclick = () => { S = defaults(); save(); closeSheet(); render(); }; }));
+}
+function keyPageHtml() {
+  const st = S.settings, A = S.access, fmtD = s => { if (!s) return ''; const d = new Date(s + 'T12:00:00'); return `${d.getDate()} ${MONG[d.getMonth()]}`; };
+  let card;
+  if (!Server.on()) card = `<div class="keycard"><p class="eyebrow">Сервер не подключён</p><h3>Работает без подписки</h3><p class="hint">Рацион, круги и продукты доступны. Новые блюда появятся, когда будет подключён сервер.</p></div>`;
+  else if (!A) card = `<div class="keycard"><p class="eyebrow">Ключ ещё не проверен</p><h3>${st.accessKey ? 'Нажмите «Проверить»' : 'Введите ключ'}</h3><p class="hint">Ключ выдаёт Telegram-бот: команда /start — пробный доступ на 7 дней.</p></div>`;
+  else if (A.error) card = `<div class="keycard bad"><p class="eyebrow">Доступ не активен</p><h3>${{no_key: 'Нет ключа', key_not_found: 'Ключ не найден', expired: 'Подписка закончилась', device_mismatch: 'Ключ на другом устройстве', blocked: 'Ключ заблокирован'}[A.error] || 'Ошибка'}</h3><p class="hint">${esc(API_MSG[A.error] || '')}</p></div>`;
+  else card = `<div class="keycard ok"><p class="eyebrow">${A.plan === 'trial' ? 'Пробный доступ' : 'Подписка'}</p><h3 class="gt">до ${fmtD(A.until)}</h3><p class="hint">Осталось ${A.days_left} ${ruDays(+A.days_left || 0)}${A.ai_left != null ? ` · новых блюд от нейросети сегодня: ${A.ai_left}` : ''}</p></div>`;
+  return `${card}
+    <div class="panel"><label class="field"><span><em>Ключ доступа</em><input id="st-acc" type="password" autocomplete="off" value="${esc(st.accessKey)}" placeholder="MR-XXXXXXXX"></span></label><button class="btn primary wide" id="st-acc-check">Проверить ключ</button></div>
+    <p class="hint">Ключ привязывается к этому устройству. Сменили телефон или очистили данные браузера — отвяжите старое устройство в боте командой /device.</p>
+    ${st.botUrl ? `<a class="btn ghost wide" href="${esc(st.botUrl)}" target="_blank" rel="noopener">Открыть Telegram-бота</a>` : ''}
+    <h4>Для разработчика</h4><div class="panel"><label class="field"><span><em>Адрес сервера</em><input id="st-srv" autocomplete="off" value="${esc(st.serverUrl)}" placeholder="https://….workers.dev"></span></label>
+    <label class="field"><span><em>Ссылка на Telegram-бота</em><input id="st-bot" autocomplete="off" value="${esc(st.botUrl)}" placeholder="https://t.me/…"></span></label></div>`;
 }
 /* ---------- Мои вкусы: тест, круги, пометки, обмен ---------- */
 function tastesHtml() {
@@ -1000,6 +1153,7 @@ function tastesHtml() {
   const banned = S.banned.ids.map(getDish).filter(Boolean);
   const notes = Object.entries(S.marks.notes).map(([id, t]) => [getDish(id), t]).filter(x => x[0]);
   return `<div class="alert">${ic('heart')}<div><b>${T.done ? 'Тест пройден' : 'Тест вкусов'}</b><p>${T.done ? 'Вкусы учитываются при подборе. Пройти заново можно в любой момент.' : '1–2 минуты: выберите из пар блюд то, что больше нравится. Выбранное сразу попадёт в ваши круги.'}</p></div></div>
+  ${Array.isArray(T.lvl) ? `<div class="lvlbar">${LEVELS.map((n, k) => { const sum = T.lvl.reduce((a, b) => a + b, 0) || 1; return `<div><b>${r0(T.lvl[k] / sum * 100)}%</b><span>${n}</span></div>`; }).join('')}</div>` : ''}
   <div class="actions two"><button class="btn primary" data-test="self">Пройти самостоятельно</button><button class="btn ghost" data-test="family">Пройти с семьёй</button></div>
   <h4>Круги блюд · ${secLabel()}</h4>
   <div class="panel"><ul class="ing">${types.map(t => `<li><span>${names[t]}</span><b>${libMerged(t, 'main').length} из ${capacity(t)} · вторичный ${libMerged(t, 'sec').length}</b></li>`).join('')}</ul></div>
@@ -1021,22 +1175,36 @@ function bindTastes(v) {
   $('#tx-exp').onclick = exportTastes; $('#tx-imp').onclick = importTastes;
   $('#tx-reset').onclick = () => sheet(`<h3>Очистить круги?</h3><p>Основные и вторичные круги всех кухонь будут пустыми и начнут формироваться заново. Удалённые навсегда блюда останутся удалёнными.</p><div class="actions two"><button class="btn ghost" id="cr-no">Отмена</button><button class="btn primary" id="cr-yes">Очистить</button></div>`, b => { $('#cr-no', b).onclick = closeSheet; $('#cr-yes', b).onclick = () => { S.lib = {}; save(); closeSheet(); render(); }; });
 }
-function tasteTest(mode) {
+async function tasteTest(mode) {
   S.taste.mode = mode;
-  const pool = Object.values(DBMAP).filter(d => allowedByDiet(d) && !isBanned(d)), pairs = [];
-  ['b', 'l', 'd', 'b', 'l', 'd', 's', 'l'].forEach(t => { const c = pool.filter(d => d.types.includes(t) && !pairs.flat().includes(d)).sort(() => Math.random() - 0.5); const a = c[0], b = c.find(x => x !== a && x.cuisine !== a.cuisine) || c[1]; if (a && b) pairs.push([a, b, t]); });
-  let i = 0;
+  const TYPES = ['b', 'l', 'd', 'b', 'l', 'd', 's', 'l'];
+  let pairs = [], server = false;
+  if (Server.on() && S.settings.accessKey) {
+    sheet(`<p class="eyebrow">Тест вкусов</p><h3>Подбираю пары блюд…</h3><p class="hint">Это займёт пару секунд.</p>`);
+    try { const st = S.settings, j = await Server.call('/v1/taste-test', {allergies: st.allergens || [], diet: DIET_API[st.diet] || 'all', forbid: st.forbidden});
+      pairs = (j.pairs || []).map((p, i) => { const a = fromApi(p[0]), b = fromApi(p[1]); rememberDish(a); rememberDish(b); return [a, b, TYPES[i] || a.types[0]]; }); server = pairs.length > 0; }
+    catch (e) { closeSheet(); toast(e.message + (KEY_ERRORS.includes(e.code) ? '' : ' Пройду тест на встроенных блюдах.')); if (KEY_ERRORS.includes(e.code)) return; }
+  }
+  if (!server) { const pool = Object.values(DBMAP).filter(d => allowedByDiet(d) && !isBanned(d));
+    TYPES.forEach(t => { const c = pool.filter(d => d.types.includes(t) && !pairs.flat().includes(d)).sort(() => Math.random() - 0.5); const a = c[0], b = c.find(x => x !== a && x.cuisine !== a.cuisine) || c[1]; if (a && b) pairs.push([a, b, t]); }); }
+  const lvl = [34, 33, 33]; let i = 0;
+  const finish = async () => {
+    S.taste.done = true; closeSheet();
+    if (server) { const w = lvl.map(v => Math.max(5, Math.min(90, r0(v)))); S.taste.lvl = w; try { await Server.call('/v1/tastes', {set: {w}}); } catch (e) { toast('Вкусы сохранены в телефоне, на сервер отправлю позже'); S.taste.pendingLvl = w; } }
+    save(); render(); toast('Готово: вкусы учтены');
+  };
   const step = () => {
-    if (i >= pairs.length) { S.taste.done = true; save(); closeSheet(); render(); toast('Готово: вкусы учтены'); return; }
+    if (i >= pairs.length) { finish(); return; }
     const [a, b] = pairs[i];
     sheet(`<p class="eyebrow">${mode === 'family' ? 'Выбирайте вместе' : 'Тест вкусов'} · ${i + 1} из ${pairs.length}</p><h3>Что больше по душе?</h3>
-     <div class="pair">${[a, b].map((d, k) => `<button class="pcard" data-p="${k}"><b>${esc(d.name)}</b><small>${esc(d.cuisine)} · ${d.time} мин</small></button>`).join('')}</div>
+     <div class="pair">${[a, b].map((d, k) => `<button class="pcard" data-p="${k}"><b>${esc(d.name)}</b><small>${d.time} мин · ${r0(nut(d).kcal)} ккал</small></button>`).join('')}</div>
      <div class="actions two"><button class="btn ghost" data-p="both">Оба</button><button class="btn ghost" data-p="none">Ни одно</button></div>`, el => el.querySelectorAll('[data-p]').forEach(x => x.onclick = () => {
         const p = x.dataset.p, t = pairs[i][2], pick = p === 'both' ? [a, b] : p === 'none' ? [] : [[a, b][+p]];
-        pick.forEach(d => { libTake(d, d.types.includes(t) ? t : d.types[0]); S.taste.w[d.cuisine] = Math.min(0.6, (S.taste.w[d.cuisine] || 0) + 0.12); });
-        if (p === 'none') [a, b].forEach(d => { S.taste.w[d.cuisine] = Math.max(-0.6, (S.taste.w[d.cuisine] || 0) - 0.05); });
+        pick.forEach(d => { libTake(d, d.types.includes(t) ? t : d.types[0]); if (d.lvl != null) lvl[d.lvl] += 12; else S.taste.w[d.cuisine] = Math.min(0.6, (S.taste.w[d.cuisine] || 0) + 0.12); });
+        if (p === 'none') [a, b].forEach(d => { if (d.lvl != null) lvl[d.lvl] -= 5; else S.taste.w[d.cuisine] = Math.max(-0.6, (S.taste.w[d.cuisine] || 0) - 0.05); });
         i++; save(); step(); }));
   };
+  if (!pairs.length) { closeSheet(); toast('Не хватает блюд для теста'); return; }
   step();
 }
 const XKEY = 'moy-racion · обмен вкусами · v1';
@@ -1044,12 +1212,13 @@ async function xKey() { const h = await crypto.subtle.digest('SHA-256', new Text
 const b64u = buf => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 const unb64u = s => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4)), c => c.charCodeAt(0));
 async function gz(str, back) { const st = new Blob([str]).stream().pipeThrough(back ? new DecompressionStream('gzip') : new CompressionStream('gzip')); return back ? new Response(st).text() : new Uint8Array(await new Response(st).arrayBuffer()); }
-function recentDishes() {
-  const src = S.plan || S.lastWeek; if (!src) return [];
-  const ti = S.plan ? Math.min(todayIdx(), src.len - 1) : src.len - 1, days = [];
-  for (let d = ti; d >= 0 && days.length < 3; d--) if (src.days[d].slots.some(Boolean)) days.push(d);
-  if (!days.length) for (let d = 0; d < Math.min(3, src.len); d++) days.push(d);
-  const out = {}; days.forEach(d => src.days[d].slots.forEach(s => { if (s && !s.leftover) out[s.dish.id] = s.dish; }));
+function recentDishes() { // блюда за 3 последних дня: сегодня и прошедшие (из истории), иначе — ближайшие собранные
+  const seq = [];
+  if (S.plan && S.plan.days[0]) seq.push(S.plan.days[0]);
+  if (S.lastWeek && S.lastWeek.days) for (let d = S.lastWeek.days.length - 1; d >= 0; d--) seq.push(S.lastWeek.days[d]);
+  let days = seq.filter(d => d.slots.some(Boolean)).slice(0, 3);
+  if (!days.length && S.plan) days = S.plan.days.filter(d => d.slots.some(Boolean)).slice(0, 3);
+  const out = {}; days.forEach(d => d.slots.forEach(s => { if (s && !s.leftover) out[s.dish.id] = s.dish; }));
   return Object.values(out);
 }
 async function exportTastes() {
@@ -1097,15 +1266,6 @@ function historyHtml() {
   return L.days.map((d, i) => { const dt = new Date(addDays(L.start, i) + 'T12:00:00'); return `<h4>${DOW[dt.getDay()]}, ${dt.getDate()} ${MON[dt.getMonth()]}</h4><ul class="ing">${d.slots.map((s, k) => `<li><span>${pat[k][1]}</span><b>${s ? esc(s.dish.name) : '—'}</b></li>`).join('')}</ul>`; }).join('');
 }
 
-/* ---------- Фоновая синхронизация общей базы (раз в неделю, незаметно) ---------- */
-async function syncServer() {
-  const st = S.settings; if (!st.serverUrl || (S.lastSync && Date.now() - S.lastSync.at < 7 * 864e5)) return;
-  try {
-    const r = await fetch(st.serverUrl.replace(/\/$/, '') + '/sync?since=' + encodeURIComponent((S.lastSync && S.lastSync.until) || '1970-01-01')); if (!r.ok) return;
-    const j = await r.json(); (j.dishes || []).forEach(o => { try { const d = normalizeDish(o, o.types || 'l'); d.id = o.id; d.src = 'server'; S.dishStore[d.id] = d; } catch (e) {} });
-    S.lastSync = {at: Date.now(), until: j.until}; save();
-  } catch (e) {}
-}
 /* ---------- Запуск ---------- */
 $('#nav div').innerHTML = [['plan','Рацион'],['shop','Продукты'],['collect','Сбор']].map(([k, t]) => `<button class="tab" data-tab="${k}"><span class="tab-ic">${ic(k)}</span>${t}</button>`).join('');
 document.querySelectorAll('.tab').forEach(b => b.onclick = () => { S.ui.tab = b.dataset.tab; S.ui.set = null; save(); render(); });
@@ -1118,6 +1278,6 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSheet()
 if (S.feed && S.feed.active) { S.feed.loading = false; if (!S.feed.card && !S.feed.exhausted) S.feed.active = false; }
 auditPlanSafety(); save();
 render();
-setTimeout(syncServer, 3000);
+setTimeout(() => { refreshPrices(); flushFeedback(); if (S.taste.pendingLvl && Server.on() && S.settings.accessKey) Server.call('/v1/tastes', {set: {w: S.taste.pendingLvl}}).then(() => { delete S.taste.pendingLvl; save(); }).catch(() => {}); }, 3000);
 if ('serviceWorker' in navigator && location.protocol === 'https:' && !location.hostname.endsWith('claude.ai') && !location.hostname.includes('claudeusercontent')) navigator.serviceWorker.register('sw.js').catch(() => {});
 })();
