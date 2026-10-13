@@ -1279,5 +1279,8 @@ if (S.feed && S.feed.active) { S.feed.loading = false; if (!S.feed.card && !S.fe
 auditPlanSafety(); save();
 render();
 setTimeout(() => { refreshPrices(); flushFeedback(); if (S.taste.pendingLvl && Server.on() && S.settings.accessKey) Server.call('/v1/tastes', {set: {w: S.taste.pendingLvl}}).then(() => { delete S.taste.pendingLvl; save(); }).catch(() => {}); }, 3000);
-if ('serviceWorker' in navigator && location.protocol === 'https:' && !location.hostname.endsWith('claude.ai') && !location.hostname.includes('claudeusercontent')) navigator.serviceWorker.register('sw.js').catch(() => {});
+if ('serviceWorker' in navigator && location.protocol === 'https:' && !location.hostname.endsWith('claude.ai') && !location.hostname.includes('claudeusercontent')) { // новая версия сайта: сервис-воркер обновляется при каждом открытии, страница один раз перезагружается на свежие файлы
+  const had = !!navigator.serviceWorker.controller; let reloaded = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if (had && !reloaded) { reloaded = true; location.reload(); } });
+  navigator.serviceWorker.register('sw.js', {updateViaCache: 'none'}).then(r => r.update()).catch(() => {}); }
 })();
