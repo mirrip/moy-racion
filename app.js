@@ -92,7 +92,6 @@ function nut(dish, factor = 1) {
     ['kcal','p','f','c','fib','na', ...Object.keys(MICRO)].forEach(k => t[k] += (i[k] || 0) * q);
     t.g += i.g * factor; t.price += (i.price || 0) * i.g * factor / 1000;
   });
-  t.na += (dish.salt || 0) * factor * 390;
   return t;
 }
 /* ---------- Справочники v4: кухни, разделы сложности, аллергены ---------- */
@@ -123,64 +122,61 @@ function allowedByDiet(d) {
 }
 
 /* ---------- Безопасность питания (docs/NUTRITION_SAFETY.md): всё считается по главному едоку ---------- */
-const SAFE = {na_meal: {b: 800, l: 800, d: 800, s: 300}, na_day: 2000, ret_day: 3000, sugar_meal: 10, d_day: 100, fe_day: 45, vc_day: 2000, salt_na: 390};
+const SAFE = {na_meal: {b: 400, l: 400, d: 400, s: 150}, na_day: 1000, na_day_big: 1300, ret_day: 3000, sugar_meal: 10, d_day: 100, fe_day: 45, vc_day: 2000}; // натрий — только из продуктов, соль по вкусу (14.10)
 const RISKY_ING = ['liver']; // печень — убрана из подбора (С1.1)
 const ANIMAL = /[mfde]/;
 const caDay = () => S.people.some(p => p.age > 50) ? 2000 : 2500;
 function mainEaterIdx() { let k = 0, e = -1; S.people.forEach((p, i) => { const x = personTargets(p).E; if (x > e) { e = x; k = i; } }); return k; }
 const mainEater = () => S.people[mainEaterIdx()];
-const eaterFactor = (dish, slotIdx) => slotFactor(dish, slotIdx)[mainEaterIdx()] || 1;
+const naDay = () => personTargets(mainEater()).E > 3000 ? SAFE.na_day_big : SAFE.na_day;
+const eaterFactor = (dish, slotIdx) => personTargets(mainEater()).E * pattern()[slotIdx][2] / 100 / (nut(dish).kcal || 1); // И1: порция = ккал приёма / ккал блюда
+const stepsOf = d => { const st = (d.steps || []).slice(); if ((d.salt || d.saltOrig) && !st.some(t => /по вкусу/i.test(t))) st.push('Посолите по вкусу.'); return st; };
 const hasRisky = d => d.ing.some(i => RISKY_ING.includes(i.id));
 function perBase(d) { // вещества с пределом на одну базовую порцию (соль отдельно)
   if (d._pb && d._pb.salt === d.salt) return d._pb;
   const b = d.base || {}, t = {naIng: 0, ret: 0, sugar: 0, d: 0, ca: 0, fe: 0, vc: 0, noNa: false};
   d.ing.forEach(i => { const q = i.g / 100; if (i.na == null) t.noNa = true; t.naIng += (i.na || 0) * q; if (ANIMAL.test(i.flags || '')) t.ret += (i.va || 0) * q;
     if (i.id === 'honey' || /h/.test(i.flags || '')) t.sugar += (i.c || 0) * q; t.d += (i.d || 0) * q; t.ca += (i.ca || 0) * q; t.fe += (i.fe || 0) * q; t.vc += (i.vc || 0) * q; });
-  if (b.na != null) { t.naIng = Math.max(0, b.na - (d.salt || 0) * SAFE.salt_na); t.noNa = false; } // данные сервера — главнее
+  if (b.na != null) { t.naIng = b.na; t.noNa = false; } // данные сервера — главнее (соль = 0, по вкусу)
   if (b.ret != null) t.ret = b.ret; if (b.sugar_add != null) t.sugar = b.sugar_add;
   Object.defineProperty(d, '_pb', {value: Object.assign(t, {salt: d.salt}), enumerable: false, configurable: true, writable: true});
   return t;
 }
-function eaterIntake(d, slotIdx) { const f = eaterFactor(d, slotIdx), b = perBase(d); return {na: (b.naIng + (d.salt || 0) * SAFE.salt_na) * f, ret: b.ret * f, sugar: b.sugar * f, d: b.d * f, ca: b.ca * f, fe: b.fe * f, vc: b.vc * f}; }
+function eaterIntake(d, slotIdx) { const f = eaterFactor(d, slotIdx), b = perBase(d); return {na: b.naIng * f, ret: b.ret * f, sugar: b.sugar * f, d: b.d * f, ca: b.ca * f, fe: b.fe * f, vc: b.vc * f}; }
 function eaterDay(day, except) { // что главный едок уже получает за день (пропущенные приёмы не вычитаются — запас)
   const t = {na: 0, ret: 0, sugar: 0, d: 0, ca: 0, fe: 0, vc: 0};
   S.plan.days[day].slots.forEach((sl, i) => { if (!sl || i === except || sl.unsafe) return; const x = eaterIntake(sl.dish, i); Object.keys(t).forEach(k => t[k] += x[k]); });
   return t;
 }
-const SAFE_WHY = {risky: 'печень убрана из рациона', nodata: 'нет данных о натрии', na: 'слишком солёное для этого дня', ret: 'много витамина A (ретинола)', sugar: 'больше 10 г добавленного сахара', d: 'перебор витамина D', ca: 'перебор кальция', fe: 'перебор железа', vc: 'перебор витамина C'};
 function safeFit(dish, day, slotIdx) { // Р5: можно ли поставить блюдо в этот приём; соль уменьшается до предела
   if (!dish || !S.plan || !S.plan.days[day]) return {ok: false, why: 'nodata'};
   if (hasRisky(dish)) return {ok: false, why: 'risky'};
   const b = perBase(dish); if (b.noNa) return {ok: false, why: 'nodata'};
   const type = pattern()[slotIdx][0], f = eaterFactor(dish, slotIdx), u = eaterDay(day, slotIdx);
-  const naCap = Math.min(SAFE.na_meal[type] || 800, SAFE.na_day - u.na), naIng = b.naIng * f;
-  if (naIng > naCap) return {ok: false, why: 'na'};
-  const salt = Math.max(0, Math.min(dish.salt || 0, Math.floor((naCap - naIng) / (SAFE.salt_na * f) * 10) / 10));
+  const naIng = b.naIng * f;
+  if (naIng > (SAFE.na_meal[type] || 400) + 1e-6 || u.na + naIng > naDay() + 1e-6) return {ok: false, why: 'na'};
   if (u.ret + b.ret * f > SAFE.ret_day) return {ok: false, why: 'ret'};
   if (b.sugar * f > SAFE.sugar_meal) return {ok: false, why: 'sugar'};
   if (u.d + b.d * f > SAFE.d_day) return {ok: false, why: 'd'};
   if (u.ca + b.ca * f > caDay()) return {ok: false, why: 'ca'};
   if (u.fe + b.fe * f > SAFE.fe_day) return {ok: false, why: 'fe'};
   if (u.vc + b.vc * f > SAFE.vc_day) return {ok: false, why: 'vc'};
-  return {ok: true, salt};
+  return {ok: true};
 }
-function withSalt(d, salt) { // копия блюда с уменьшенной солью для конкретного приёма
-  const orig = d.saltOrig != null ? d.saltOrig : (d.salt || 0);
-  if (salt >= orig - 1e-9) { if (d.saltOrig == null) return d; const c = Object.assign({}, d, {salt: orig}); delete c.saltOrig; return c; }
-  return Object.assign({}, d, {salt, saltOrig: orig});
+function withSalt(d) { // соль по вкусу: старые копии с уменьшенной солью возвращаются к исходному блюду
+  if (d.saltOrig == null) return d; const c = Object.assign({}, d, {salt: d.saltOrig}); delete c.saltOrig; return c;
 }
 function safePlace(day, slotIdx, dish, extra) { // ставит блюдо только после проверки; возвращает false и причину, если нельзя
   const r = safeFit(dish, day, slotIdx); if (!r.ok) return r;
-  S.plan.days[day].slots[slotIdx] = Object.assign({dish: withSalt(dish, r.salt), status: null}, extra || {});
+  S.plan.days[day].slots[slotIdx] = Object.assign({dish: withSalt(dish), status: null}, extra || {});
   return r;
 }
 function auditPlanSafety() { // при открытии: пересчитать соль и пометить небезопасные блюда рациона
   if (!S.plan) return;
   S.plan.days.forEach((dd, day) => dd.slots.forEach((sl, i) => { if (sl) delete sl.unsafe; }));
   S.plan.days.forEach((dd, day) => dd.slots.forEach((sl, i) => {
-    if (!sl) return; const base = sl.dish.saltOrig != null ? withSalt(sl.dish, sl.dish.saltOrig) : sl.dish;
-    const r = safeFit(base, day, i);
-    if (r.ok) sl.dish = withSalt(base, r.salt); else sl.unsafe = r.why;
+    if (!sl) return; sl.dish = withSalt(sl.dish);
+    const r = safeFit(sl.dish, day, i); if (!r.ok) sl.unsafe = r.why;
   }));
 }
 
@@ -257,7 +253,6 @@ function scoreDish(d, tg) {
 /* Норма приёма (уровень 1 фильтра здоровья): натрий и белок на всю семью после подгонки порций */
 function healthOk(d, slotIdx, tg) {
   const type = pattern()[slotIdx][0], n = nut(d, famFactor(d, slotIdx)), ppl = S.people.length;
-  if (n.na > (type === 's' ? 300 : 800) * ppl * 1.25) return false;
   if (type !== 's' && n.p < tg.P * 0.45) return false;
   return true;
 }
@@ -322,8 +317,8 @@ function unban(id) { const d = getDish(id); feedback(d, 'undislike'); S.banned.i
 /* ---------- Подбор одной карточки ---------- */
 function fitsSlot(d, ctx, relaxed) {
   if (!d || !d.types.includes(ctx.type) || isBanned(d) || !allowedByDiet(d)) return false;
-  if (usedInPlan(d.id) || ctx.seen.has(d.id)) return false;
-  if (relaxed !== 'section' && !secs().includes(sectionOf(d))) return false;
+  if (ctx.seen.has(d.id) || (relaxed !== 'repeat' && usedInPlan(d.id))) return false; // И2: в крайнем случае повтор блюда недели лучше пустого приёма
+  if (relaxed !== 'section' && relaxed !== 'repeat' && !secs().includes(sectionOf(d))) return false;
   if (d.src !== 'server' && budgetPenalty(d, ctx.slot) >= 99) return false; // цену новых блюд подбирает сервер по budget_left
   if (!safeFit(d, ctx.day, ctx.slot).ok) return false;
   return healthOk(d, ctx.slot, ctx.tg);
@@ -346,7 +341,7 @@ function pickNewLocal(ctx, relaxed) {
 }
 async function pickNew(ctx) {
   if (Server.on()) { const d = await serverNew(ctx); if (d) return d; }
-  return pickNewLocal(ctx) || pickNewLocal(ctx, true) || pickNewLocal(ctx, 'section');
+  return pickNewLocal(ctx) || pickNewLocal(ctx, true) || pickNewLocal(ctx, 'section') || pickNewLocal(ctx, 'repeat');
 }
 async function nextCard() {
   const F = S.feed, key = F.day + '-' + F.slot, t0 = performance.now();
@@ -566,7 +561,7 @@ function readPerson(id) {
 }
 function viewOnboard() {
   return `<section class="onb"><div class="crest">${ic('leaf')}</div><p class="eyebrow">Мой рацион</p><h1 class="gt">Рацион на неделю, собранный под вашу семью</h1>
-  <p class="lead">Расскажите о себе — по этим данным приложение рассчитает калории, белки, жиры, углеводы, клетчатку, витамины и минералы. Семью добавите позже в настройках.</p>
+  <p class="lead">Расскажите о себе — по этим данным приложение рассчитает калории, белки, жиры, углеводы и клетчатку. Семью добавите позже в настройках.</p>
   ${personForm({sex: 'm'})}<button class="btn primary wide" id="onb-go">Начать</button></section>`;
 }
 function bindOnboard() { $('#onb-go').onclick = () => { const p = readPerson(); if (!p) return; S.people = [p]; S.onboarded = true; save(); render(); }; }
@@ -620,7 +615,7 @@ function mealCard(day, i, m) {
   const sl = S.plan.days[day].slots[i];
   if (!sl) return `<article class="meal empty-meal"><p class="mtype">${m[1]}</p><p>Не выбрано</p><button class="btn ghost" data-replace="${day}:${i}">Подобрать</button></article>`;
   const d = sl.dish, ff = famFactor(d, i), n = nut(d, ff);
-  if (sl.unsafe) return `<article class="meal unsafe"><p class="mtype">${m[1]}</p><p class="mname">${esc(d.name)}</p><p class="warn">Заменить: ${SAFE_WHY[sl.unsafe]}</p><button class="btn primary" data-replace="${day}:${i}">Заменить блюдо</button></article>`;
+  if (sl.unsafe) return `<article class="meal unsafe"><p class="mtype">${m[1]}</p><p class="mname">${esc(d.name)}</p><p class="hint">Это блюдо нужно заменить</p><button class="btn primary" data-replace="${day}:${i}">Заменить блюдо</button></article>`;
   return `<article class="meal${sl.status ? ' st-' + sl.status : ''}">
    <button class="mhead" data-meal="${day}:${i}" aria-haspopup="dialog"><span class="mgo" aria-hidden="true">›</span>
      <span class="mtype">${m[1]}${sl.status === 'eaten' ? ' · съедено' : sl.status === 'skipped' ? ' · пропущено' : ''}</span>
@@ -652,21 +647,16 @@ function portionSheet(day, i) {
 }
 function mealPage(day, i) { // блюдо — отдельное полноэкранное окно
   const sl = S.plan.days[day].slots[i]; if (!sl) return;
-  const d = sl.dish, m = pattern()[i], ff = famFactor(d, i), n = nut(d, ff), mn = familyMicro(), sh = m[2] / 100, ti = todayIdx();
-  const tops = Object.keys(MICRO).filter(k => n[k] >= mn[k] * sh * 1.3).map(k => MICRO[k][0]);
-  const flags = []; if (n.d < mn.d * sh * 0.5) flags.push('витамин D обычно трудно набрать едой — его стоит обсудить с врачом');
-  if (S.settings.diet === 'vegan') flags.push('при веганском питании нужен B12 в виде добавки');
+  const d = sl.dish, m = pattern()[i], ff = famFactor(d, i), n = nut(d, ff), ti = todayIdx();
   const dt = new Date(addDays(S.plan.start, day) + 'T12:00:00'), fs = slotFactor(d, i), tot = fs.reduce((a, b) => a + b, 0), base = nut(d);
   sheet(`<p class="eyebrow">${m[1]} · ${DOW[dt.getDay()]}, ${dt.getDate()} ${MON[dt.getMonth()]}${sl.status === 'eaten' ? ' · съедено' : sl.status === 'skipped' ? ' · пропущено' : ''}</p>
    <h2 class="pg-title">${esc(d.name)}</h2>
    <div class="grid4"><div><b>${r0(n.kcal)}</b><span>ккал</span></div><div><b>${r0(n.p)}</b><span>белки, г</span></div><div><b>${r0(n.f)}</b><span>жиры, г</span></div><div><b>${r0(n.c)}</b><span>углеводы, г</span></div></div>
    <div class="facts"><div><em>Готовка</em><b>${d.time} мин</b></div><div><em>Сложность</em><b>${d.diff} из 10</b></div><div><em>Клетчатка</em><b>${r1(n.fib)} г</b></div><div><em>Стоимость</em><b>≈ ${r0(famCost(d) / 10) * 10} ₽</b></div></div>
    ${S.marks.notes[d.id] ? `<p class="note">${ic('heart', 'sm')} ${esc(S.marks.notes[d.id])}</p>` : ''}
-   <h4>Ингредиенты на всех · ${r0(n.g)} г</h4><ul class="ing">${d.ing.map(x => `<li><span>${esc(x.name)}</span><b>${fmtAmt(x, x.g * ff)}</b></li>`).join('')}${d.salt || d.saltOrig ? `<li><span>Соль йодированная${d.saltOrig != null ? ' · уменьшена' : ''}</span><b>${r1((d.salt || 0) * ff)} г</b></li>` : ''}</ul>
-   ${d.steps && d.steps.length ? `<h4>Как готовить</h4><ol class="steps">${d.steps.map(t => `<li>${esc(t)}</li>`).join('')}</ol>` : ''}
+   <h4>Ингредиенты на всех · ${r0(n.g)} г</h4><ul class="ing">${d.ing.map(x => `<li><span>${esc(x.name)}</span><b>${fmtAmt(x, x.g * ff)}</b></li>`).join('')}${d.salt || d.saltOrig ? '<li><span>Соль</span><b>по вкусу</b></li>' : ''}</ul>
+   ${stepsOf(d).length ? `<h4>Как готовить</h4><ol class="steps">${stepsOf(d).map(t => `<li>${esc(t)}</li>`).join('')}</ol>` : ''}
    ${S.people.length > 1 ? `<h4>Порции по людям</h4><ul class="ing">${S.people.map((p, k) => `<li><span>${esc(p.name)}</span><b>${r0(base.g * fs[k])} г · ${r0(base.kcal * fs[k])} ккал</b></li>`).join('')}</ul>` : ''}
-   <h4>Польза</h4><p class="small">Натрий ${r0(n.na)} мг · ${d.src === 'server' ? 'из общей базы блюд' : 'из встроенной базы'}</p>
-   ${tops.length ? `<p class="good">Богато: ${tops.join(', ')}</p>` : ''}${flags.length ? `<p class="hint">${flags.join('; ').replace(/^./, c => c.toUpperCase())}.</p>` : ''}
    ${day <= ti ? `<div class="actions two"><button class="btn${sl.status === 'eaten' ? ' primary' : ' ghost'}" data-st="eaten">Съедено</button><button class="btn${sl.status === 'skipped' ? ' primary' : ' ghost'}" data-st="skipped">Пропущено</button></div>` : ''}
    <button class="btn ghost wide" id="mp-replace">Заменить блюдо</button>`, b => {
     b.querySelectorAll('[data-st]').forEach(x => x.onclick = () => { sl.status = sl.status === x.dataset.st ? null : x.dataset.st; save(); render(); mealPage(day, i); });
@@ -679,31 +669,16 @@ function dayTotals(day) {
   S.plan.days[day].slots.forEach((sl, i) => { if (!sl || sl.status === 'skipped') return; const n = nut(sl.dish, famFactor(sl.dish, i)); Object.keys(t).forEach(k => t[k] += n[k]); });
   return t;
 }
-function eaterDayFull(day) { // итог дня главного едока (съеденные и запланированные приёмы, без пропущенных)
-  const t = nut({ing: [], salt: 0}); t.ret = 0; t.sugar = 0;
-  S.plan.days[day].slots.forEach((sl, i) => { if (!sl || sl.status === 'skipped') return; const f = eaterFactor(sl.dish, i), n = nut(sl.dish, f), b = perBase(sl.dish);
-    Object.keys(n).forEach(k => t[k] += n[k]); t.ret += b.ret * f; t.sugar += b.sugar * f; });
-  return t;
-}
-function dayPassport(day) {
-  const t = dayTotals(day), fam = familyDay(), me = mainEater(), et = eaterDayFull(day), mn = microNorm(me, S.settings.norms);
+function dayPassport(day) { // только калории, БЖУ и клетчатка (решения 14.10: всё о питании — под капотом)
+  const t = dayTotals(day), fam = familyDay();
   const filled = S.plan.days[day].slots.filter(Boolean).length, all = S.plan.days[day].slots.length;
-  const ok = filled === all && Math.abs(t.kcal / fam.E - 1) <= 0.12 && t.p >= fam.P * 0.9 && et.na <= SAFE.na_day;
-  const own = [].concat(...S.plan.days.map(d => d.slots)).filter(Boolean), ownShare = own.filter(s => s.fromDesired || s.manual).length / Math.max(1, own.length);
   const dt = new Date(addDays(S.plan.start, day) + 'T12:00:00');
-  const LIM = [['na', 'Натрий', SAFE.na_day], ['ret', 'Витамин A (ретинол)', SAFE.ret_day], ['d', 'Витамин D', SAFE.d_day], ['ca', 'Кальций', caDay()], ['fe', 'Железо', SAFE.fe_day]];
-  const pct = (v, lim) => r0(v / lim * 100), cls = p => p > 100 ? 'bad' : p > 80 ? 'warn' : '';
-  const NORM = ['b12', 'k', 'mg', 'fol', 'n3', 'vc'];
   sheet(`<p class="eyebrow">Паспорт дня</p><h2 class="pg-title">${DOW[dt.getDay()]}, ${dt.getDate()} ${MON[dt.getMonth()]}</h2>
   <div class="grid4"><div><b>${r0(t.kcal)}</b><span>ккал</span></div><div><b>${r0(t.p)}</b><span>белки, г</span></div><div><b>${r0(t.f)}</b><span>жиры, г</span></div><div><b>${r0(t.c)}</b><span>углеводы, г</span></div></div>
   <p>Клетчатка ${r0(t.fib)} г на всех</p>
-  ${filled < all ? `<p class="warn">День собран не полностью: ${filled} из ${all} приёмов.</p>` : ok ? '<p class="good">Рацион дня сбалансирован</p>' : '<p class="hint">Небольшие отклонения от нормы выравниваются за неделю.</p>'}
-  ${ownShare > 0.5 ? '<p class="warn">Больше половины блюд рациона выбраны вручную — баланс может отличаться от нормы.</p>' : ''}
+  ${filled < all ? `<p class="hint">Собрано ${filled} из ${all} приёмов.</p>` : ''}
   <h4>Приёмы дня</h4><ul class="ing">${pattern().map((m, i) => { const sl = S.plan.days[day].slots[i]; return `<li><span>${m[1]}${sl ? ' · ' + esc(sl.dish.name) : ''}</span><b>${sl ? r0(nut(sl.dish, famFactor(sl.dish, i)).kcal) + ' ккал' : '—'}</b></li>`; }).join('')}</ul>
-  <h4>По людям</h4><ul class="ing">${S.people.map(p => { const x = personTargets(p); const sh = x.E / fam.E; return `<li><span>${esc(p.name)}</span><b>${r0(t.kcal * sh)} ккал · Б ${r0(t.p * sh)} г</b></li>`; }).join('')}</ul>
-  <h4>Пределы · ${esc(me.name)}</h4><p class="hint">Считаем по тому, кто ест больше всех: если безопасно для него, безопасно для всей семьи.</p>
-  <ul class="ing">${LIM.map(([k, n, lim]) => { const p = pct(et[k], lim); return `<li><span>${n}</span><b class="${cls(p)}">${p}% от предела</b></li>`; }).join('')}</ul>
-  <h4>Витамины и минералы · ${esc(me.name)}</h4><ul class="ing">${NORM.map(k => { const p = pct(et[k], mn[k]); return `<li><span>${MICRO[k][0]}</span><b class="${p >= 100 ? 'good' : ''}">${p >= 100 ? '✓ норма' : p + '% нормы'}</b></li>`; }).join('')}</ul>`, null, {full: true});
+  ${S.people.length > 1 ? `<h4>По людям</h4><ul class="ing">${S.people.map(p => { const sh = personTargets(p).E / fam.E; return `<li><span>${esc(p.name)}</span><b>${r0(t.kcal * sh)} ккал · Б ${r0(t.p * sh)} · Ж ${r0(t.f * sh)} · У ${r0(t.c * sh)}</b></li>`; }).join('')}</ul>` : ''}`, null, {full: true});
 }
 
 /* ---------- Сбор рациона ---------- */
@@ -767,7 +742,7 @@ async function addDesired(name, type) {
   if (!d) { toast(Server.on() ? 'Не удалось подобрать такое блюдо.' : 'Такого блюда нет во встроенной базе. Новые блюда — с сервером и ключом доступа.'); return; }
   if (!allowedByDiet(d)) { toast('В блюде есть то, что в семье исключено'); return; }
   const sf = safePlace(day, slot, d, {fromDesired: true});
-  if (!sf.ok) { toast(`«${d.name}» не поставлено: ${SAFE_WHY[sf.why]}`); return; }
+  if (!sf.ok) { toast(`«${d.name}» не подходит для этого дня — выберите другое`); return; }
   libTake(d, ctx.type); S.seenEver.push(d.id); save(); render();
   const dt = new Date(addDays(S.plan.start, day) + 'T12:00:00'), when = `${DOW[dt.getDay()]}, ${dt.getDate()} ${MON[dt.getMonth()]}`;
   toast(healthOk(d, slot, ctx.tg) ? `«${d.name}» — ${when}` : `«${d.name}» — ${when}. Блюдо выше нормы приёма, остальные приёмы дня подстроятся.`);
@@ -830,7 +805,7 @@ function cardHtml(d, m, slot) {
     <div class="facts"><div><em>Готовка</em><b>${d.time} мин</b></div><div><em>Сложность</em><b>${d.diff} из 10</b></div><div><em>Клетчатка</em><b>${r1(n.fib)} г</b></div><div><em>Стоимость</em><b>≈ ${r0(famCost(d) / 10) * 10} ₽</b></div></div>
     ${S.marks.notes[d.id] ? `<p class="note">${ic('heart', 'sm')} ${esc(S.marks.notes[d.id])}</p>` : ''}
     <div class="ingbox" id="ingbox"><p class="ingh">Ингредиенты · на ${S.people.length > 1 ? 'всю семью' : 'вас'}</p><ul class="ings">${ing}</ul>
-     ${d.steps && d.steps.length ? `<p class="ingh">Как готовить</p><ol class="csteps">${d.steps.map(t => `<li>${esc(t)}</li>`).join('')}</ol>` : ''}</div>
+     ${stepsOf(d).length ? `<p class="ingh">Как готовить</p><ol class="csteps">${stepsOf(d).map(t => `<li>${esc(t)}</li>`).join('')}</ol>` : ''}</div>
     <button class="ingmore" id="ingmore" hidden>Читать полностью</button>
    </div></article>`;
 }
@@ -864,7 +839,7 @@ function ingFull() {
   const F = S.feed; if (!F || !F.card) return; const d = F.card.dish, ff = famFactor(d, F.slot);
   sheet(`<p class="eyebrow">${pattern()[F.slot][1]}</p><h3>${esc(d.name)}</h3>
    <ul class="ings big">${d.ing.map(x => `<li><span>${esc(x.name)}</span><i></i><b>${fmtAmt(x, x.g * ff)}</b></li>`).join('')}</ul>
-   ${d.steps && d.steps.length ? `<h4>Как готовить</h4><ol class="steps">${d.steps.map(t => `<li>${esc(t)}</li>`).join('')}</ol>` : ''}`);
+   ${stepsOf(d).length ? `<h4>Как готовить</h4><ol class="steps">${stepsOf(d).map(t => `<li>${esc(t)}</li>`).join('')}</ol>` : ''}`);
 }
 const rubber = (v, lim) => Math.sign(v) * lim * (1 - Math.exp(-Math.abs(v) / lim)); // тянется, но не дальше предела
 function bindFeed() {
@@ -923,8 +898,8 @@ async function goSlot(day, slot) { const F = S.feed; F.day = day; F.slot = slot;
 function place(dish) {
   const F = S.feed, pat = pattern();
   const r = safePlace(F.day, F.slot, dish, {manual: F.manual});
-  if (!r.ok) { toast(`«${dish.name}» не подходит для этого дня: ${SAFE_WHY[r.why]}`); return false; }
-  if (S.collect.cook2 && 'ld'.includes(pat[F.slot][0]) && F.day + 1 < S.plan.len && !S.plan.days[F.day + 1].slots[F.slot] && !safePlace(F.day + 1, F.slot, dish, {leftover: true}).ok) toast('На завтра блюдо не повторяю — день выйдет за предел соли или витаминов');
+  if (!r.ok) { toast(`«${dish.name}» не подходит для этого дня`); return false; }
+  if (S.collect.cook2 && 'ld'.includes(pat[F.slot][0]) && F.day + 1 < S.plan.len && !S.plan.days[F.day + 1].slots[F.slot] && !safePlace(F.day + 1, F.slot, dish, {leftover: true}).ok) toast('На завтра это блюдо не повторяю');
   libTake(dish, pat[F.slot][0]); feedback(dish, 'take');
   if (!S.seenEver.includes(dish.id)) S.seenEver.push(dish.id);
   toast(`${pat[F.slot][1]}: «${dish.name}»`);
@@ -1057,7 +1032,7 @@ function cheapen() {
       .map(d => ({d, p: famCost(d)})).filter(x => x.p < s.price * 0.8 && safeFit(x.d, s.di, s.i).ok).sort((a, b) => a.p - b.p)[0];
     if (alt) { const nx = S.plan.days[s.di + 1], lo = nx && nx.slots[s.i];
       if (lo && lo.leftover && lo.dish.id === cur.dish.id) nx.slots[s.i] = {dish: alt.d, status: null, leftover: true};
-      S.plan.days[s.di].slots[s.i] = {dish: withSalt(alt.d, safeFit(alt.d, s.di, s.i).salt), status: null, fromDesired: false}; n++; } });
+      S.plan.days[s.di].slots[s.i] = {dish: withSalt(alt.d), status: null, fromDesired: false}; n++; } });
   save(); render(); toast(n ? `Заменено блюд: ${n}` : 'Дешевле подходящих блюд не нашлось');
 }
 
@@ -1071,7 +1046,7 @@ function viewSettings() {
     v.innerHTML = `${appbar('Настройки', 'Профиль и приложение', {back: true})}
     <button class="profile" data-person="${me.id}"><span class="mono">${esc(me.name.slice(0, 1).toUpperCase())}</span><span><b>${esc(me.name)}</b><small>${r0(t.E)} ккал · белок ${r0(t.P)} г в день</small></span>${ic('chev', 'sm')}</button>
     <nav class="rows">${SET_PAGES.map(([k, t, s]) => `<button class="row" data-set="${k}"><span class="medal">${ic(SET_IC[k])}</span><span><b>${t}</b><small>${s}</small></span>${ic('chev', 'sm')}</button>`).join('')}</nav>
-    <p class="hint center">Мой рацион · версия 0.8</p>`;
+    <p class="hint center">Мой рацион · версия 0.8.1</p>`;
     v.querySelectorAll('[data-set]').forEach(b => b.onclick = () => { S.ui.set = b.dataset.set; save(); render(); });
     v.querySelector('[data-person]').onclick = () => editPerson(me);
     return;
@@ -1088,7 +1063,6 @@ function viewSettings() {
     <label class="field"><span><em>Приёмов пищи в день</em><select id="st-meals">${[3,4,5].map(n => `<option value="${n}"${st.meals === n && !st.mealsAuto ? ' selected' : ''}>${n}</option>`).join('')}<option value="auto"${st.mealsAuto ? ' selected' : ''}>Автоматически по норме белка</option></select></span></label>
     <div class="field col"><em>Длина рациона</em><div class="seg">${[[7,'7 дней'],[3,'3 дня']].map(([k, t]) => `<button class="${st.planLen === k ? 'on' : ''}" data-len="${k}">${t}</button>`).join('')}</div></div>
     <label class="field"><span><em>Тип питания</em><select id="st-diet">${[['all','Обычное'],['nopork','Без свинины'],['pesc','Без мяса, с рыбой'],['veg','Вегетарианское'],['vegan','Веганское']].map(([k, t]) => `<option value="${k}"${st.diet === k ? ' selected' : ''}>${t}</option>`).join('')}</select></span></label>
-    <label class="field"><span><em>Нормы</em><select id="st-norms"><option value="NASEM"${st.norms === 'NASEM' ? ' selected' : ''}>Международные (NASEM)</option><option value="RU"${st.norms === 'RU' ? ' selected' : ''}>Российские (МР 2.3.1.0253-21)</option></select></span></label>
     <div class="field col"><em>Запрещённые продукты для всей семьи</em><div class="chipin"><input id="st-forb" placeholder="Например, грибы"><button class="btn ghost sm" id="st-forb-add">Добавить</button></div>${st.forbidden.length ? `<div class="chips">${st.forbidden.map((w, i) => `<button class="chip x" data-rmforb="${i}">${esc(w)}</button>`).join('')}</div>` : ''}</div></div>
     <h4>Аллергии в семье</h4><p class="hint">Отмеченное убирается из блюд у всех членов семьи.</p><div class="panel">${ALLERGENS.map(([k, t]) => `<label class="field check"><input type="checkbox" data-alg="${k}"${(st.allergens || []).includes(k) ? ' checked' : ''}><span>${t}</span></label>`).join('')}</div>`;
   if (pg === 'tastes') body = tastesHtml();
@@ -1124,7 +1098,6 @@ function viewSettings() {
   on('#st-bot', 'onchange', e => { st.botUrl = e.target.value.trim(); save(); });
   if (pg === 'tastes') bindTastes(v);
   on('#st-diet', 'onchange', e => { st.diet = e.target.value; save(); });
-  on('#st-norms', 'onchange', e => { st.norms = e.target.value; save(); });
   const fa = () => { const x = $('#st-forb').value.trim(); if (x) { st.forbidden.push(x); save(); render(); } };
   on('#st-forb-add', 'onclick', fa); on('#st-forb', 'onkeydown', e => { if (e.key === 'Enter') fa(); });
   v.querySelectorAll('[data-rmforb]').forEach(b => b.onclick = () => { st.forbidden.splice(+b.dataset.rmforb, 1); save(); render(); });
