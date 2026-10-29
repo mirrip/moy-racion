@@ -219,6 +219,7 @@ body.feeding { overflow: hidden; overscroll-behavior: none; }
 .ghostcard { border-radius: 28px; background: linear-gradient(var(--surface), var(--surface)) padding-box, var(--edge) border-box; border: 1px solid transparent; }
 .ghostcard.g2 { transform: translateY(16px) scale(.92); opacity: .4; }
 .ghostcard.g1 { transform: translateY(8px) scale(.96); opacity: .7; }
+.dcard.under { transform: translateY(8px) scale(.96); opacity: .7; pointer-events: none; cursor: default; }
 .dcard { border-radius: 28px; overflow: hidden; display: flex; flex-direction: column; touch-action: none; user-select: none; -webkit-user-select: none; cursor: grab;
   transition: transform .34s cubic-bezier(.25, .9, .3, 1.15), opacity .24s ease; z-index: 2; will-change: transform;
   border: 1px solid transparent; background: linear-gradient(var(--surface), var(--surface)) padding-box, var(--gg) border-box;
@@ -418,7 +419,7 @@ html, body, * { scrollbar-width: none; -ms-overflow-style: none; }
 <div id="sheet" hidden><div class="sheet-card" role="dialog" aria-modal="true"><div class="sheet-grip"><button class="btn ghost sm" id="sheet-close">Закрыть</button></div><div id="sheet-body"></div></div></div>
 <div id="toast" role="status" hidden></div>
 
-<script src="data.js?v=1793275859"></script>
-<script src="app.js?v=1793275859"></script>
+<script src="data.js?v=1793280209"></script>
+<script src="app.js?v=1793280209"></script>
 </body>
 </html>
