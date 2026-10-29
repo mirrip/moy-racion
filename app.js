@@ -26,12 +26,25 @@ function microNorm(p, profile) {
     b12: 2.4, d: p.age > 70 ? 20 : 15, fol: 400, n3: m ? 1.6 : 1.1
   };
 }
-const lossOk = (h, w) => !(h > 0 && w > 0) || w / Math.pow(h / 100, 2) > 20; // защита цели: при ИМТ ≤ 20 снижение недоступно
-const safeGoal = (p, g) => g === 'loss' && !lossOk(p.height, p.weight) ? 'keep' : g;
+const bmiOf = (h, w) => h > 0 && w > 0 ? w / Math.pow(h / 100, 2) : null;
+const lossOk = (h, w) => { const b = bmiOf(h, w); return b == null || b > 20; }; // защита цели: при ИМТ ≤ 20 снижение недоступно
+const gainOk = (h, w) => { const b = bmiOf(h, w); return b == null || b < 25; }; // при ИМТ ≥ 25 набор недоступен
+const safeGoal = (p, g) => (g === 'loss' && !lossOk(p.height, p.weight)) || (g === 'gain' && !gainOk(p.height, p.weight)) ? 'keep' : g;
+const WEIGHT_STALE = 42 * 864e5, WEIGHT_ASK = 14 * 864e5;
+const effGoal = p => { const g = safeGoal(p, p.goal); return g !== 'keep' && p.wAt && Date.now() - p.wAt > WEIGHT_STALE ? 'keep' : g; }; // вес не обновляли > 6 недель — цель на паузе
+const WORK = {sit: [1.3, 'Сидячая'], stand: [1.5, 'На ногах'], phys: [1.7, 'Физическая']};
+const SPORT = {light: [4, 'Лёгкий — ходьба, йога'], mid: [6, 'Средний — бег трусцой, плавание, игровые'], hard: [9, 'Интенсивный — силовые, единоборства, интервальные']};
+function activeE(p, bmr) { // BMR × работа + тренировки (MET − 1) × вес × часы в неделю / 7; не выше 2,4 × BMR
+  if (!p.work) return bmr * (+p.activity || 1.6);
+  const hrs = Math.max(0, +p.trN || 0) * Math.max(0, +p.trMin || 0) / 60, met = (SPORT[p.sport] || SPORT.light)[0];
+  return Math.min(2.4 * bmr, bmr * (WORK[p.work] || WORK.sit)[0] + (met - 1) * p.weight * hrs / 7);
+}
 function personTargets(p, goal) {
   const bmr = 10 * p.weight + 6.25 * p.height - 5 * p.age + (p.sex === 'm' ? 5 : -161);
-  const g = GOALS[safeGoal(p, p.goal || goal)] || GOALS.keep;
-  let E = bmr * (+p.activity || 1.6) * (1 + g[1]);
+  const gk = goal ? safeGoal(p, goal) : effGoal(p), g = GOALS[gk] || GOALS.keep;
+  let E = activeE(p, bmr);
+  if (gk === 'loss') E -= Math.min(0.2 * E, 11 * p.weight); // темп ≤ 1 % веса в неделю
+  if (gk === 'gain') E += Math.min(0.1 * E, 5.5 * p.weight); // темп ≤ 0,5 % веса в неделю
   E = Math.max(E, p.sex === 'm' ? 1500 : 1200);
   const bmi = p.weight / Math.pow(p.height / 100, 2);
   const W = bmi >= 30 ? 25 * Math.pow(p.height / 100, 2) : p.weight;
@@ -62,7 +75,9 @@ try { S = Object.assign(defaults(), JSON.parse(localStorage.getItem(KEY) || '{}'
   ['settings', 'collect', 'marks', 'banned', 'taste', 'shop', 'ui'].forEach(k => { S[k] = Object.assign({}, d[k], S[k] || {}); });
   if (Array.isArray(S.marks.allergy) && S.marks.allergy.length) { S.settings.forbidden = [...new Set([...S.settings.forbidden, ...S.marks.allergy])]; }
   delete S.marks.allergy; delete S.marks.dislike;
-  (S.people || []).forEach(p => { p.goal = safeGoal(p, p.goal); });
+  (S.people || []).forEach(p => { p.goal = safeGoal(p, p.goal); if (!p.wAt) p.wAt = Date.now();
+    if (!p.work) { const a = +p.activity || 1.6; Object.assign(p, a < 1.5 ? {work: 'sit', trN: 0} : a < 1.7 ? {work: 'sit', trN: 3, trMin: 45, sport: 'mid'} : a < 1.85 ? {work: 'stand', trN: 4, trMin: 45, sport: 'mid'} : a < 2 ? {work: 'phys', trN: 0} : {work: 'phys', trN: 5, trMin: 60, sport: 'hard'}); } });
+  S.rareLog = S.rareLog || [];
   if (!S.srvDefault) { if (!S.settings.serverUrl) S.settings.serverUrl = DEFAULT_SERVER; S.srvDefault = 1; } // 0.8.4: адрес сервера по умолчанию (один раз)
   if (!Array.isArray(S.collect.sections) || !S.collect.sections.length) S.collect.sections = typeof S.collect.section === 'number' ? Array.from({length: S.collect.section + 1}, (_, i) => i) : [0, 1];
   delete S.collect.section; delete S.collect.cuisine;
@@ -133,7 +148,9 @@ const ANIMAL = /[mfde]/;
 const caDay = () => S.people.some(p => p.age > 50) ? 2000 : 2500;
 function mainEaterIdx() { let k = 0, e = -1; S.people.forEach((p, i) => { const x = personTargets(p).E; if (x > e) { e = x; k = i; } }); return k; }
 const mainEater = () => S.people[mainEaterIdx()];
-const naDay = () => personTargets(mainEater()).E > 3000 ? SAFE.na_day_big : SAFE.na_day;
+const naDayE = E => Math.max(SAFE.na_day, 0.5 * E), feDayE = E => Math.max(SAFE.fe_day, 15 * E / 1000); // пределы растут с калориями (решения 15.10 (3))
+const naDay = () => naDayE(personTargets(mainEater()).E);
+const naMeal = type => { const b = SAFE.na_meal[type] || 400; return Math.max(b, b * personTargets(mainEater()).E / 2000); };
 const eaterFactor = (dish, slotIdx) => personTargets(mainEater()).E * pattern()[slotIdx][2] / 100 / (nut(dish).kcal || 1); // И1: порция = ккал приёма / ккал блюда
 const stepsOf = d => { const st = (d.steps || []).slice(); if ((d.salt || d.saltOrig) && !st.some(t => /по вкусу/i.test(t))) st.push('Посолите по вкусу.'); return st; };
 const hasRisky = d => d.ing.some(i => RISKY_ING.includes(i.id));
@@ -159,33 +176,35 @@ function safeFit(dish, day, slotIdx) { // Р5: можно ли поставит�
   const b = perBase(dish); if (b.noNa) return {ok: false, why: 'nodata'};
   const type = pattern()[slotIdx][0], f = eaterFactor(dish, slotIdx), u = eaterDay(day, slotIdx);
   const naIng = b.naIng * f;
-  if (naIng > (SAFE.na_meal[type] || 400) + 1e-6 || u.na + naIng > naDay() + 1e-6) return {ok: false, why: 'na'};
+  if (naIng > naMeal(type) + 1e-6 || u.na + naIng > naDay() + 1e-6) return {ok: false, why: 'na'};
   if (u.ret + b.ret * f > SAFE.ret_day) return {ok: false, why: 'ret'};
   if (b.sugar * f > SAFE.sugar_meal) return {ok: false, why: 'sugar'};
   if (u.d + b.d * f > SAFE.d_day) return {ok: false, why: 'd'};
   if (u.ca + b.ca * f > caDay()) return {ok: false, why: 'ca'};
-  if (u.fe + b.fe * f > SAFE.fe_day) return {ok: false, why: 'fe'};
+  if (u.fe + b.fe * f > feDayE(personTargets(mainEater()).E)) return {ok: false, why: 'fe'};
   if (u.vc + b.vc * f > SAFE.vc_day) return {ok: false, why: 'vc'};
   const E = personTargets(mainEater()).E, eMeal = E * pattern()[slotIdx][2] / 100;
   if (u.sugar + b.sugar * f > 0.1 * E / 4 + 1e-6) return {ok: false, why: 'sugar'};
   if (b.sfa * f > 0.1 * eMeal / 9 + 1e-6 || u.sfa + b.sfa * f > 0.1 * E / 9 + 1e-6) return {ok: false, why: 'sfa'};
   const w = weekLeft(day, slotIdx), m = weekMarks(dish);
-  if ((m.tuna && w.tuna_ok < 1) || (m.fish && w.fish_left < 1) || m.egg * f > w.eggs_left * 55 + 1e-6 || m.red * f > w.redmeat_g_left + 1e-6) return {ok: false, why: 'week'};
+  if ((m.rare && w.rare_ok < 1) || (m.fish && w.fish_left < 1) || m.egg * f > w.eggs_left * 55 + 1e-6 || m.red * f > w.redmeat_g_left + 1e-6) return {ok: false, why: 'week'};
   return {ok: true};
 }
 const RED_RX = /говяд|свинин|баранин|телят|ягнят/i, TUNA_RX = /тунец|тунц/i;
 function weekMarks(d) { // частоты недели на базовую порцию: рыба, тунец, яйца (г), красное мясо (г)
-  if (d._wm) return d._wm; const o = {fish: false, tuna: false, egg: 0, red: 0};
+  if (d._wm) return d._wm; const o = {fish: false, rare: !!d.rare || (Array.isArray(d.risk) && (d.risk.includes('rare') || d.risk.includes('tuna'))), egg: 0, red: 0};
   d.ing.forEach(i => { const fl = i.flags || '';
-    if (/f/.test(fl) || ALG_RX.fish.test(i.name)) o.fish = true; if (i.id === 'tuna' || TUNA_RX.test(i.name)) o.tuna = true;
+    if (/f/.test(fl) || ALG_RX.fish.test(i.name)) o.fish = true; if (i.id === 'tuna' || TUNA_RX.test(i.name) || +i.rare === 1) o.rare = true;
     if (/e/.test(fl) || i.id === 'eggs' || /яйц|яич/i.test(i.name)) o.egg += i.g; if (/p/.test(fl) || i.id === 'beef' || RED_RX.test(i.name)) o.red += i.g; });
   Object.defineProperty(d, '_wm', {value: o, enumerable: false, configurable: true, writable: true}); return o;
 }
 function weekLeft(day, slotIdx) { // остатки частот недели рациона у главного едока (рыба 2, тунец 1, яйца 7 шт., красное мясо 500 г)
-  const w = {fish: 0, tuna: 0, egg: 0, red: 0};
+  const w = {fish: 0, rare: 0, egg: 0, red: 0};
   S.plan.days.forEach((dd, di) => dd.slots.forEach((sl, i) => { if (!sl || (di === day && i === slotIdx) || sl.unsafe) return; const m = weekMarks(sl.dish), f = eaterFactor(sl.dish, i);
-    if (m.fish) w.fish++; if (m.tuna) w.tuna++; w.egg += m.egg * f; w.red += m.red * f; }));
-  return {liver_ok: 0, tuna_ok: w.tuna >= 1 ? 0 : 1, fish_left: Math.max(0, 2 - w.fish), eggs_left: Math.max(0, r1(7 - w.egg / 55)), redmeat_g_left: Math.max(0, r0(500 - w.red))};
+    if (m.fish) w.fish++; if (m.rare) w.rare++; w.egg += m.egg * f; w.red += m.red * f; }));
+  const dd = addDays(S.plan.start, day), recent = (S.rareLog || []).some(x => Math.abs((new Date(dd + 'T12:00:00') - new Date(x + 'T12:00:00')) / 864e5) < 30);
+  const rare_ok = w.rare >= 1 || recent ? 0 : 1; // редкое блюдо (и тунец) — не чаще раза в 30 дней
+  return {liver_ok: 0, rare_ok, tuna_ok: rare_ok, fish_left: Math.max(0, 2 - w.fish), eggs_left: Math.max(0, 7 - w.egg / 55), redmeat_g_left: Math.max(0, 500 - w.red)};
 }
 function weekDeficits() { // дефициты недели по самому нуждающемуся (только внутри расчёта и в запросе к серверу)
   if (!S.plan) return [];
@@ -213,9 +232,12 @@ function planAddons() { // И5: личные добавки — обычные �
     S.people.forEach((p, j) => {
       const t = personTargets(p), caN = microNorm(p, S.settings.norms).ca, w = wk[j], lag = () => w.ca < 0.9 * caN * w.share || w.p < 0.9 * t.P * w.share;
       let n = 0;
-      for (const a of list) { if (n >= 2 || !lag()) break;
+      for (const a0 of list) { if (n >= 1 || !lag()) break;
+        const per = (ING[a0.id].kcal || 1) / 100, step = a0.g >= 100 ? 50 : 10, g = Math.min(a0.g, Math.floor(0.05 * t.E / per / step) * step); // не больше 5 % энергии дня
+        if (g < (a0.g >= 100 ? 100 : 15)) continue;
+        const a = {id: a0.id, g, d: {id: a0.d.id, name: a0.d.name, types: 's', ing: [Object.assign({}, ING[a0.id], {g})]}};
         const x = nut(a.d), b = perBase(a.d), T = dayT[j];
-        if (T.na + b.naIng > (t.E > 3000 ? SAFE.na_day_big : SAFE.na_day) || T.ret + b.ret > SAFE.ret_day || T.ca + b.ca > caDay() || T.fe + b.fe > SAFE.fe_day || T.d + b.d > SAFE.d_day) continue;
+        if (T.na + b.naIng > naDayE(t.E) || T.ret + b.ret > SAFE.ret_day || T.ca + b.ca > caDay() || T.fe + b.fe > feDayE(t.E) || T.d + b.d > SAFE.d_day) continue;
         T.na += b.naIng; T.ret += b.ret; T.ca += b.ca; T.fe += b.fe; T.d += b.d; w.ca += x.ca; w.p += x.p;
         res.push({pid: p.id, name: p.name, ing: a.d.ing[0], g: a.g, n: x}); n++; }
     });
@@ -276,7 +298,7 @@ function rollWeek() { // лента: рацион всегда на 7 дней �
   if (!H || H.meals !== m || !Array.isArray(H.days)) H = {start: S.plan.start, len: 0, meals: m, days: []};
   else { const gap = Math.round((new Date(S.plan.start + 'T12:00:00') - new Date(addDays(H.start, H.days.length) + 'T12:00:00')) / 864e5);
     if (gap < 0 || gap > 7) H = {start: S.plan.start, len: 0, meals: m, days: []}; else for (let k = 0; k < gap; k++) H.days.push(empty()); }
-  past.forEach(d => H.days.push(d));
+  past.forEach((d, k) => { H.days.push(d); if (d.slots.some(sl => sl && weekMarks(sl.dish).rare)) { S.rareLog = (S.rareLog || []).concat(addDays(S.plan.start, k)).filter(x => x >= addDays(S.plan.start, -40)); } });
   const extra = Math.max(0, H.days.length - 7); if (extra) { H.days = H.days.slice(extra); H.start = addDays(H.start, extra); }
   H.len = H.days.length; S.lastWeek = H;
   const keep = S.plan.days.slice(off); while (keep.length < S.plan.len) keep.push(empty());
@@ -523,8 +545,8 @@ const MICRO_KEYS = ['vc', 'va', 'ca', 'fe', 'mg', 'k', 'b12', 'd', 'fol', 'n3', 
 function fromApi(o) { // блюдо API.md §4 → внутренний формат (хранится в кэше целиком)
   if (!o || !o.id || !o.name || !Array.isArray(o.ing) || !o.ing.length) throw new ApiError('bad_request', 'Неполное блюдо от сервера');
   return {id: String(o.id), num: o.num, section: o.section, cuisine: LEVELS[o.cuisine] || '', lvl: o.cuisine, name: String(o.name), types: o.types || '', time: +o.time || 30, diff: +o.diff || 3, salt: +o.salt || 0,
-    steps: (o.steps || []).map(String), allergens: o.allergens || [], flags: o.flags || '', cost: o.base ? +o.base.cost : undefined, pclass: o.pclass, base: o.base, src: 'server', priceAt: Date.now(),
-    ing: o.ing.map(x => { const m = Array.isArray(x.micro) ? x.micro : []; const r = {id: x.id, name: x.name, cat: x.cat, unit: x.unit || 'g', pcs_g: x.pcs_g, price: +x.price || 0, kcal: +x.kcal || 0, p: +x.p || 0, f: +x.f || 0, c: +x.c || 0, fib: +x.fib || 0, flags: x.flags || '', allergens: x.allergens || [], g: +x.g || 0};
+    steps: (o.steps || []).map(String), allergens: o.allergens || [], flags: o.flags || '', cost: o.base ? +o.base.cost : undefined, pclass: o.pclass, base: o.base, src: 'server', priceAt: Date.now(), rare: !!o.rare, risk: Array.isArray(o.risk) ? o.risk : [],
+    ing: o.ing.map(x => { const m = Array.isArray(x.micro) ? x.micro : []; const r = {id: x.id, name: x.name, cat: x.cat, unit: x.unit || 'g', pcs_g: x.pcs_g, price: +x.price || 0, kcal: +x.kcal || 0, p: +x.p || 0, f: +x.f || 0, c: +x.c || 0, fib: +x.fib || 0, flags: x.flags || '', allergens: x.allergens || [], g: +x.g || 0, rare: +x.rare || 0};
       MICRO_KEYS.forEach((k, i) => r[k] = +m[i] || 0); return r; })};
 }
 function eaterReq(day, slot) { // API §3 `eater`: главный едок — цели дня и что уже съел сегодня (без веса, возраста, пола, имён)
@@ -537,7 +559,7 @@ function eaterReq(day, slot) { // API §3 `eater`: главный едок — �
 function dishRequest(ctx, extra = {}) { // тело /v1/dish: только нормы и параметры, без имён и личных данных
   const pat = pattern(), st = S.settings, ex = new Set();
   allSlots().forEach(sl => ex.add(sl.dish.id)); (ctx.seen || []).forEach(id => ex.add(id));
-  return Object.assign({meal: pat[ctx.slot][0], sections: secs(), count: 1, eater: eaterReq(ctx.day, ctx.slot), week: S.plan ? weekLeft(ctx.day, ctx.slot) : undefined, deficits: weekDeficits(),
+  return Object.assign({meal: pat[ctx.slot][0], sections: secs(), count: 1, eater: eaterReq(ctx.day, ctx.slot), week: S.plan ? (w => Object.assign(w, {eggs_left: Math.floor(w.eggs_left * 10) / 10, redmeat_g_left: Math.floor(w.redmeat_g_left)}))(weekLeft(ctx.day, ctx.slot)) : undefined, deficits: weekDeficits(),
     meal_share: pat[ctx.slot][2] / 100, budget_left: Math.max(0, r0(budgetLeft())), meals_left: mealsLeft(), meals_per_day: S.plan.meals,
     allergies: st.allergens || [], diet: DIET_API[st.diet] || 'all', forbid: st.forbidden, exclude: [...ex].filter(id => !DBMAP[id]).slice(-300), other_cuisines: !!S.collect.otherCuisines}, extra);
 }
@@ -621,7 +643,7 @@ function render() {
   const vk = (S.feed && S.feed.active) ? 'feed' : S.ui.tab + (S.ui.set || ''); if (vk !== lastView) { const sc = $('#scroller'); if (sc) sc.scrollTop = 0; window.scrollTo(0, 0); lastView = vk; }
   document.querySelectorAll('.tab').forEach(b => b.setAttribute('aria-current', b.dataset.tab === S.ui.tab ? 'page' : 'false'));
   const v = $('#view');
-  if (!S.onboarded || !S.people.length) { v.innerHTML = viewOnboard(); bindOnboard(); $('#nav').hidden = true; return; }
+  if (!S.onboarded || !S.people.length) { v.innerHTML = S.ui.onbLife && S.people.length ? viewLifeOnboard() : viewOnboard(); bindOnboard(); $('#nav').hidden = true; return; }
   $('#nav').hidden = false;
   const feeding = !!(S.feed && S.feed.active); document.body.classList.toggle('feeding', feeding);
   if (feeding) { const old = $('#feedwrap');
@@ -640,22 +662,49 @@ function personForm(p = {}) {
   <label>Возраст<input id="pf-age" type="number" inputmode="numeric" min="18" max="100" value="${p.age || 30}"></label></div>
   <div class="row2"><label>Рост, см<input id="pf-height" type="number" inputmode="numeric" min="130" max="230" value="${p.height || 175}"></label>
   <label>Вес, кг<input id="pf-weight" type="number" inputmode="decimal" min="35" max="250" value="${p.weight || 75}"></label></div>
-  <label>Образ жизни<select id="pf-act">${PAL.map(([v, t]) => `<option value="${v}"${+p.activity === v ? ' selected' : ''}>${t}</option>`).join('')}</select></label>
-  <label>Цель<select id="pf-goal">${Object.entries(GOALS).map(([k, g]) => `<option value="${k}"${safeGoal({height: p.height || 175, weight: p.weight || 75}, p.goal) === k ? ' selected' : ''}${k === 'loss' && !lossOk(p.height || 175, p.weight || 75) ? ' disabled' : ''}>${g[0]}</option>`).join('')}</select></label>
   <p class="hint">Приложение рассчитано на взрослых 18+. Детские нормы появятся позже.</p></div>`;
 }
 function readPerson(id) {
   const age = +$('#pf-age').value;
   if (!$('#pf-name').value.trim()) { toast('Введите имя'); return null; }
   if (age < 18) { toast('Пока поддерживаются только взрослые 18+'); return null; }
-  return {id: id || 'p' + Date.now(), name: $('#pf-name').value.trim(), sex: $('#pf-sex').value, age, height: +$('#pf-height').value, weight: +$('#pf-weight').value, activity: +$('#pf-act').value, goal: safeGoal({height: +$('#pf-height').value, weight: +$('#pf-weight').value}, $('#pf-goal').value)};
+  return {id: id || 'p' + Date.now(), name: $('#pf-name').value.trim(), sex: $('#pf-sex').value, age, height: +$('#pf-height').value, weight: +$('#pf-weight').value, wAt: Date.now()};
+}
+const NEW_LIFE = {work: 'sit', trN: 0, trMin: 45, sport: 'light', goal: 'keep'};
+function readPersonMerged(p) { // данные человека + сохранённый образ жизни; вес изменился — отметка времени обновляется
+  const np = readPerson(p && p.id); if (!np) return null;
+  const r = Object.assign({}, NEW_LIFE, p || {}, np); if (p && p.weight === np.weight && p.wAt) r.wAt = p.wAt; r.goal = safeGoal(r, r.goal); return r;
+}
+function lifeHtml(people) { // «Образ жизни»: работа, тренировки, цель — у каждого человека своя
+  const opt = (arr, cur) => arr.map(([v, t, dis]) => `<option value="${v}"${String(cur) === String(v) ? ' selected' : ''}${dis ? ' disabled' : ''}>${t}</option>`).join('');
+  return people.map(p => `${people.length > 1 ? `<h4>${esc(p.name)}</h4>` : ''}<div class="panel" data-life="${p.id}">
+    <label class="field"><span><em>Работа</em><select data-k="work">${opt(Object.entries(WORK).map(([k, v]) => [k, v[1]]), p.work)}</select></span></label>
+    <label class="field"><span><em>Тренировок в неделю</em><select data-k="trN">${opt(Array.from({length: 15}, (_, i) => [i, i ? String(i) : 'Нет']), p.trN || 0)}</select></span></label>
+    ${+p.trN ? `<label class="field"><span><em>Длительность, мин</em><select data-k="trMin">${opt([20, 30, 45, 60, 75, 90, 120, 150, 180].map(m => [m, String(m)]), p.trMin || 45)}</select></span></label>
+    <label class="field"><span><em>Вид спорта</em><select data-k="sport">${opt(Object.entries(SPORT).map(([k, v]) => [k, v[1]]), p.sport || 'light')}</select></span></label>` : ''}
+    <label class="field"><span><em>Цель</em><select data-k="goal">${opt([['gain', 'Набор', !gainOk(p.height, p.weight)], ['keep', 'Поддержание'], ['loss', 'Снижение', !lossOk(p.height, p.weight)]], safeGoal(p, p.goal))}</select></span></label>
+    <p class="hint">${r0(personTargets(p).E)} ккал в день</p></div>`).join('') + '<p class="hint">Указывайте честно: иначе расчёт даст недобор или перебор, это может навредить.</p>';
+}
+function bindLife(root, after) {
+  root.querySelectorAll('[data-life] select').forEach(sel => sel.onchange = () => {
+    const p = S.people.find(x => x.id === sel.closest('[data-life]').dataset.life), k = sel.dataset.k;
+    p[k] = k === 'trN' || k === 'trMin' ? +sel.value : sel.value; if (k === 'trN' && p.trN && !p.trMin) p.trMin = 45; p.goal = safeGoal(p, p.goal); save(); after(); });
+}
+function viewLifeOnboard() {
+  return `<section class="onb"><p class="eyebrow">Шаг 2 из 2</p><h1 class="gt">Образ жизни</h1>
+  <p class="lead">По работе и тренировкам приложение рассчитает калории — в том числе для спортсменов.</p>${lifeHtml(S.people)}
+  <button class="btn primary wide" id="onb-life">Готово</button></section>`;
 }
 function viewOnboard() {
   return `<section class="onb"><div class="crest">${ic('leaf')}</div><p class="eyebrow">Мой рацион</p><h1 class="gt">Рацион на неделю, собранный под вашу семью</h1>
   <p class="lead">Расскажите о себе — по этим данным приложение рассчитает калории, белки, жиры, углеводы и клетчатку. Семью добавите позже в настройках.</p>
   ${personForm({sex: 'm'})}<button class="btn primary wide" id="onb-go">Начать</button></section>`;
 }
-function bindOnboard() { $('#onb-go').onclick = () => { const p = readPerson(); if (!p) return; S.people = [p]; S.onboarded = true; save(); render(); offerTasteTest(); }; }
+function bindOnboard() {
+  const life = $('#onb-life');
+  if (life) { bindLife($('#view'), () => { const sc = window.scrollY; render(); window.scrollTo(0, sc); }); life.onclick = () => { S.onboarded = true; delete S.ui.onbLife; save(); render(); offerTasteTest(); }; return; }
+  $('#onb-go').onclick = () => { const p = readPersonMerged(null); if (!p) return; S.people = [p]; S.ui.onbLife = true; save(); render(); };
+}
 function offerTasteTest() { // после онбординга: тест вкусов, можно пропустить
   sheet(`<p class="eyebrow">Тест вкусов</p><h3>Что вам по вкусу?</h3><p class="hint">1–2 минуты: выберите из пар блюд то, что больше нравится. Пройти позже можно в настройках, «Мои вкусы».</p><div class="actions two"><button class="btn ghost" id="tt-skip">Пропустить</button><button class="btn primary" id="tt-go">Пройти</button></div>`, b => { $('#tt-skip', b).onclick = closeSheet; $('#tt-go', b).onclick = () => tasteTest('self'); });
 }
@@ -691,19 +740,36 @@ function viewPlan() {
       : `<div class="empty"><h3>В этот день блюд не было</h3><p>Прошедшие дни показываются только для просмотра.</p></div>`;
     v.innerHTML = `${appbar('Рацион', 'Прошедший день')}<nav class="strip" aria-label="Дни">${strip}</nav><p class="dayhint">${dlabel} · прошедший день, только просмотр</p><div class="meals">${meals}</div>`;
     bindStrip(); return; }
-  if (!S.plan) { v.innerHTML = `${appbar('Рацион', 'С сегодняшнего дня')}<nav class="strip" aria-label="Дни">${strip}</nav><div class="empty"><p class="eyebrow">Рацион не собран</p><h3>Рацион на 7 дней с сегодняшнего</h3><p>Соберите рацион — блюда появятся здесь по дням, а список покупок — в «Продуктах».</p><button class="btn primary wide" id="go-collect">Собрать рацион</button></div>`; bindStrip(); $('#go-collect').onclick = goCollect; return; }
+  if (!S.plan) { v.innerHTML = `${appbar('Рацион', 'С сегодняшнего дня')}${weightCard()}${b12Card()}<nav class="strip" aria-label="Дни">${strip}</nav><div class="empty"><p class="eyebrow">Рацион не собран</p><h3>Рацион на 7 дней с сегодняшнего</h3><p>Соберите рацион — блюда появятся здесь по дням, а список покупок — в «Продуктах».</p><button class="btn primary wide" id="go-collect">Собрать рацион</button></div>`; bindStrip(); bindNotes(v); $('#go-collect').onclick = goCollect; return; }
   const day = ti + off, has = inPlan(day), pat = pattern();
   const filled = has && S.plan.days[day].slots.some(Boolean);
   const meals = filled ? pat.map((m, i) => mealCard(day, i, m)).join('') : `<div class="empty"><h3>На этот день блюд нет</h3><p>${has ? 'Соберите рацион, чтобы заполнить день.' : 'Этот день не входит в текущий рацион — он появится в следующем сборе.'}</p><button class="btn primary wide" id="go-collect">Собрать рацион</button></div>`;
   const end = new Date(addDays(S.plan.start, S.plan.len - 1) + 'T12:00:00');
-  v.innerHTML = `${appbar('Рацион', `${S.plan.len} дн. · по ${end.getDate()} ${MON[end.getMonth()]}`)}
+  v.innerHTML = `${appbar('Рацион', `${S.plan.len} дн. · по ${end.getDate()} ${MON[end.getMonth()]}`)}${weightCard()}${b12Card()}
   <nav class="strip" aria-label="Дни">${strip}</nav>
   <p class="dayhint">${dlabel}${off === 0 ? ' · сегодня' : ''}${filled ? ' · нажмите на день ещё раз — откроется паспорт дня' : ''}</p>
   <div class="meals">${meals}${filled ? addonCard(day) : ''}</div>`;
-  bindStrip();
+  bindStrip(); bindNotes(v);
   const gc = $('#go-collect'); if (gc) gc.onclick = goCollect;
   v.querySelectorAll('[data-meal]').forEach(b => b.onclick = () => { const [d, i] = b.dataset.meal.split(':').map(Number); mealPage(d, i); });
   v.querySelectorAll('[data-replace]').forEach(b => b.onclick = () => { const [d, i] = b.dataset.replace.split(':').map(Number); replaceSlot(d, i); });
+}
+function weightCard() { // раз в 2 недели: «Обновите вес» — сразу для всей семьи
+  if (!S.people.some(p => Date.now() - (p.wAt || 0) > WEIGHT_ASK) || (S.ui.wLater || 0) > Date.now()) return '';
+  return `<section class="panel note" id="wcard"><p class="eyebrow">Обновите вес</p>${S.people.map(p => `<label class="field"><span><em>${esc(p.name)}, кг</em><input type="number" inputmode="decimal" min="35" max="250" step="0.1" data-w="${p.id}" value="${p.weight}"></span></label>`).join('')}
+   <div class="actions two"><button class="btn ghost" id="w-later">Позже</button><button class="btn primary" id="w-save">Сохранить</button></div></section>`;
+}
+function b12Card() { // единственная пометка о питании: веганам и вегетарианцам — раз в неделю
+  if (!['veg', 'vegan'].includes(S.settings.diet) || S.ui.b12Off || Date.now() - (S.ui.b12At || 0) < 7 * 864e5) return '';
+  return `<section class="panel note" id="b12card"><p>Витамин B12 при вашем типе питания едой не набрать — его нужно получать дополнительно.</p>
+   <label class="field check"><input type="checkbox" id="b12-off"><span>Больше не показывать</span></label><button class="btn ghost wide" id="b12-ok">Понятно</button></section>`;
+}
+function bindNotes(v) {
+  const ws = $('#w-save', v); if (ws) { ws.onclick = () => { let bad = false;
+      v.querySelectorAll('[data-w]').forEach(i => { const w = +i.value, p = S.people.find(x => x.id === i.dataset.w); if (!(w >= 35 && w <= 250)) { bad = true; return; } p.weight = r1(w); p.wAt = Date.now(); p.goal = safeGoal(p, p.goal); });
+      if (bad) { toast('Проверьте вес: от 35 до 250 кг'); return; } save(); render(); toast('Вес обновлён'); };
+    $('#w-later', v).onclick = () => { S.ui.wLater = Date.now() + 3 * 864e5; save(); render(); }; }
+  const bo = $('#b12-ok', v); if (bo) bo.onclick = () => { S.ui.b12At = Date.now(); if ($('#b12-off', v).checked) S.ui.b12Off = true; save(); render(); };
 }
 function addonCard(day) { // личные добавки — как обычные продукты, без объяснений
   const a = (planAddons()[day] || []); if (!a.length) return '';
@@ -1140,8 +1206,8 @@ function cheapen() {
 }
 
 /* ---------- Настройки ---------- */
-const SET_PAGES = [['look','Оформление','Тема и акцент'],['family','Семья','Люди и их нормы'],['tastes','Мои вкусы','Тест, круги блюд, пометки, обмен'],['diet','Рацион и питание','Приёмы, тип питания, аллергии'],['health','Здоровье','Важное предупреждение'],['key','Ключ доступа','Подписка'],['history','История','Прошедшие 7 дней'],['data','Данные','Удаление с устройства'],['system','Системный','Последний запрос к серверу']];
-const SET_IC = {look:'look', family:'family', diet:'dish', tastes:'heart', health:'shield', key:'key', history:'history', data:'data', system:'code'};
+const SET_PAGES = [['look','Оформление','Тема и акцент'],['family','Семья','Люди и их нормы'],['life','Образ жизни','Работа, тренировки, цель'],['tastes','Мои вкусы','Тест, круги блюд, пометки, обмен'],['diet','Рацион и питание','Приёмы, тип питания, аллергии'],['health','Здоровье','Важное предупреждение'],['key','Ключ доступа','Подписка'],['history','История','Прошедшие 7 дней'],['data','Данные','Удаление с устройства'],['system','Системный','Последний запрос к серверу']];
+const SET_IC = {look:'look', family:'family', life:'leaf', diet:'dish', tastes:'heart', health:'shield', key:'key', history:'history', data:'data', system:'code'};
 function viewSettings() {
   const st = S.settings, M = S.marks, pg = S.ui.set, v = $('#view');
   if (!pg) {
@@ -1149,7 +1215,7 @@ function viewSettings() {
     v.innerHTML = `${appbar('Настройки', 'Профиль и приложение', {back: true})}
     <button class="profile" data-person="${me.id}"><span class="mono">${esc(me.name.slice(0, 1).toUpperCase())}</span><span><b>${esc(me.name)}</b><small>${r0(t.E)} ккал · белок ${r0(t.P)} г в день</small></span>${ic('chev', 'sm')}</button>
     <nav class="rows">${SET_PAGES.map(([k, t, s]) => `<button class="row" data-set="${k}"><span class="medal">${ic(SET_IC[k])}</span><span><b>${t}</b><small>${s}</small></span>${ic('chev', 'sm')}</button>`).join('')}</nav>
-    <p class="hint center">Мой рацион · версия 0.8.4</p>`;
+    <p class="hint center">Мой рацион · версия 0.9.0</p>`;
     v.querySelectorAll('[data-set]').forEach(b => b.onclick = () => { S.ui.set = b.dataset.set; save(); render(); });
     v.querySelector('[data-person]').onclick = () => editPerson(me);
     return;
@@ -1168,6 +1234,7 @@ function viewSettings() {
     <label class="field"><span><em>Тип питания</em><select id="st-diet">${[['all','Обычное'],['nopork','Без свинины'],['pesc','Без мяса, с рыбой'],['veg','Вегетарианское'],['vegan','Веганское']].map(([k, t]) => `<option value="${k}"${st.diet === k ? ' selected' : ''}>${t}</option>`).join('')}</select></span></label>
     <div class="field col"><em>Запрещённые продукты для всей семьи</em><div class="chipin"><input id="st-forb" placeholder="Например, грибы"><button class="btn ghost sm" id="st-forb-add">Добавить</button></div>${st.forbidden.length ? `<div class="chips">${st.forbidden.map((w, i) => `<button class="chip x" data-rmforb="${i}">${esc(w)}</button>`).join('')}</div>` : ''}</div></div>
     <h4>Аллергии в семье</h4><p class="hint">Отмеченное убирается из блюд у всех членов семьи.</p><div class="panel">${ALLERGENS.map(([k, t]) => `<label class="field check"><input type="checkbox" data-alg="${k}"${(st.allergens || []).includes(k) ? ' checked' : ''}><span>${t}</span></label>`).join('')}</div>`;
+  if (pg === 'life') body = lifeHtml(S.people);
   if (pg === 'tastes') body = tastesHtml();
   if (pg === 'health') body = `<div class="alert">${ic('shield')}<div><b>Важно</b><p>Приложение опирается на официальные нормы питания и подробный научный отчёт, но не заменяет врача и не гарантирует результат. При состояниях из списка ниже им лучше не пользоваться — посоветуйтесь с врачом или диетологом.</p></div></div>
     <h4>Состояния</h4><div class="panel">${meds.map(([k, t]) => `<label class="field check"><input type="checkbox" data-med="${k}"${st.medical[k] ? ' checked' : ''}><span>${t}</span></label>`).join('')}</div>
@@ -1188,6 +1255,7 @@ function viewSettings() {
   }
   if (pg === 'data') body = `<p class="hint">Все данные хранятся только на этом устройстве.</p><button class="btn ghost wide danger" id="st-wipe">Удалить все данные</button>`;
   v.innerHTML = `${appbar(title, 'Настройки', {back: true})}${body}`;
+  if (pg === 'life') bindLife(v, () => { const sc = $('#scroller'), y = sc ? sc.scrollTop : 0; render(); const sc2 = $('#scroller'); if (sc2) sc2.scrollTop = y; });
   v.querySelectorAll('[data-theme-set]').forEach(b => b.onclick = () => { S.theme = b.dataset.themeSet; save(); render(); });
   v.querySelectorAll('[data-accent]').forEach(b => b.onclick = () => { S.accent = b.dataset.accent; save(); render(); });
   v.querySelectorAll('[data-person]').forEach(b => b.onclick = () => editPerson(S.people.find(p => p.id === b.dataset.person)));
@@ -1335,7 +1403,7 @@ function planShapeChanged() {
 function editPerson(p) {
   sheet(`<h3>${p ? 'Изменить' : 'Новый человек'}</h3>${personForm(p || {sex: 'f', age: 30, height: 165, weight: 60})}
    <div class="actions two">${p && S.people.length > 1 ? '<button class="btn ghost danger" id="pp-del">Удалить</button>' : '<span></span>'}<button class="btn primary" id="pp-save">Сохранить</button></div>`, b => {
-    $('#pp-save', b).onclick = () => { const np = readPerson(p && p.id); if (!np) return; if (p) S.people[S.people.findIndex(x => x.id === p.id)] = np; else S.people.push(np); save(); closeSheet(); render();
+    $('#pp-save', b).onclick = () => { const np = readPersonMerged(p); if (!np) return; if (p) S.people[S.people.findIndex(x => x.id === p.id)] = np; else { S.people.push(np); S.ui.tab = 'settings'; S.ui.set = 'life'; } save(); closeSheet(); render();
       if (!p) sheet(`<p class="eyebrow">Новый человек в семье</p><h3>Пройти тест вкусов?</h3><p class="hint">Ответы ${esc(np.name)} добавятся к общему профилю семьи.</p><div class="actions"><button class="btn primary" id="nt-self">Пройти самостоятельно</button><button class="btn ghost" id="nt-fam">Пройти с семьёй</button><button class="btn ghost" id="nt-later">Позже</button></div>`, bb => { $('#nt-self', bb).onclick = () => tasteTest('self'); $('#nt-fam', bb).onclick = () => tasteTest('family'); $('#nt-later', bb).onclick = closeSheet; }); };
     const del = $('#pp-del', b); if (del) del.onclick = () => { S.people = S.people.filter(x => x.id !== p.id); save(); closeSheet(); render(); };
   });
