@@ -4,7 +4,8 @@
 const KEY = 'moy-racion-v1';
 const $ = (s, r = document) => r.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const DEFAULT_SERVER = 'https://moy-racion.mirokearos.workers.dev';
+// Переходник Google Apps Script → moy-racion.mirokearos.workers.dev: из РФ *.workers.dev в браузере не открывается (ECH и обрыв соединений после ~16 КБ)
+const DEFAULT_SERVER = 'https://script.google.com/macros/s/AKfycbwZx4KZgOHezPo9cGluuBVqmeVmaI21Qqt-Z235x_6pH7KphwKHVbpgNgQj15NcLTfPNw/exec', OLD_SERVER = 'https://moy-racion.mirokearos.workers.dev';
 const r0 = n => Math.round(n), r1 = n => Math.round(n * 10) / 10;
 
 /* ---------- Нормы (из отчёта) ---------- */
@@ -79,6 +80,7 @@ try { S = Object.assign(defaults(), JSON.parse(localStorage.getItem(KEY) || '{}'
     if (!p.work) { const a = +p.activity || 1.6; Object.assign(p, a < 1.5 ? {work: 'sit', trN: 0} : a < 1.7 ? {work: 'sit', trN: 3, trMin: 45, sport: 'mid'} : a < 1.85 ? {work: 'stand', trN: 4, trMin: 45, sport: 'mid'} : a < 2 ? {work: 'phys', trN: 0} : {work: 'phys', trN: 5, trMin: 60, sport: 'hard'}); } });
   S.rareLog = S.rareLog || [];
   if (!S.srvDefault) { if (!S.settings.serverUrl) S.settings.serverUrl = DEFAULT_SERVER; S.srvDefault = 1; } // 0.8.4: адрес сервера по умолчанию (один раз)
+  if (S.srvDefault < 2) { if (S.settings.serverUrl.trim().replace(/\/$/, '') === OLD_SERVER) S.settings.serverUrl = DEFAULT_SERVER; S.srvDefault = 2; } // 0.9.2: старый адрес → переходник
   if (!Array.isArray(S.collect.sections) || !S.collect.sections.length) S.collect.sections = typeof S.collect.section === 'number' ? Array.from({length: S.collect.section + 1}, (_, i) => i) : [0, 1];
   delete S.collect.section; delete S.collect.cuisine;
   Object.keys(S.lib || {}).forEach(k => { if (!k.startsWith('any|')) delete S.lib[k]; }); // круги по кухням больше не нужны
@@ -525,13 +527,16 @@ class ApiError extends Error { constructor(code, msg, data) { super(msg || API_M
 const Server = {
   on: () => !!S.settings.serverUrl,
   base: () => S.settings.serverUrl.trim().replace(/\/$/, ''),
+  relay: () => /^https:\/\/script\.google(usercontent)?\.com\/macros\//.test(Server.base()),
   async call(path, body, opts = {}) {
-    const keyed = opts.keyed !== false, t0 = performance.now();
-    if (keyed && path !== '/v1/feedback') await flushFeedback();
+    const keyed = opts.keyed !== false, t0 = performance.now(), relay = this.relay();
     const req = keyed ? Object.assign({key: S.settings.accessKey, device: deviceId()}, body || {}) : body;
     let res, j; const ac = new AbortController(), tm = setTimeout(() => ac.abort(), opts.timeout || 30000); // зависшее соединение не держит карточку (нейросеть на сервере — до 25 с)
+    // Переходник: путь — в ?p=, тело — обычный текст (без Content-Type: Apps Script не отвечает на предварительный запрос CORS)
+    const url = relay ? this.base() + '?p=' + encodeURIComponent(path) : this.base() + path;
     try {
-      res = await fetch(this.base() + path, opts.get ? {method: 'GET', signal: ac.signal} : {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(req), signal: ac.signal});
+      res = await fetch(url, opts.get ? {method: 'GET', signal: ac.signal} : relay ? {method: 'POST', body: JSON.stringify(req), signal: ac.signal}
+        : {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(req), signal: ac.signal});
       j = await res.json().catch(() => ({ok: false, error: 'server_error'}));
     } catch (e) { logApi(path, req, {ok: false, error: 'net', message: e.message}, t0); throw new ApiError('net'); }
     finally { clearTimeout(tm); }
@@ -539,7 +544,7 @@ const Server = {
     if (j && j.ok) return j;
     const code = (j && j.error) || 'server_error';
     if (code === 'rate_limited' && !opts.retried) { await sleep(Math.min(10, +j.retry_after || 2) * 1000); return this.call(path, body, Object.assign({}, opts, {retried: true})); }
-    if (code === 'server_error' && res.status >= 500 && !opts.retried) return this.call(path, body, Object.assign({}, opts, {retried: true})); // разовый сбой сети между Cloudflare и сервером
+    if (code === 'server_error' && (res.status >= 500 || relay) && !opts.retried) return this.call(path, body, Object.assign({}, opts, {retried: true})); // разовый сбой сети между Cloudflare и сервером
     if (KEY_ERRORS.includes(code)) S.access = Object.assign({}, S.access || {}, {error: code, until: j.until || (S.access && S.access.until), checkedAt: Date.now()});
     throw new ApiError(code, (code in API_MSG && !['bad_request', 'not_found', 'server_error'].includes(code)) ? API_MSG[code] : (j && j.message) || API_MSG[code], j);
   }
@@ -548,12 +553,7 @@ function logApi(path, req, res, t0, status) { // последний запрос
   const r = Object.assign({}, req || {}); if (r.key) r.key = '••••' + String(r.key).slice(-4);
   const cut = JSON.stringify(res || {}); S.apiLog = {at: Date.now(), path, status: status || 0, ms: r0(performance.now() - t0), req: r, res: cut.length > 6000 ? JSON.parse(JSON.stringify(res, (k, v) => Array.isArray(v) && v.length > 3 ? v.slice(0, 3).concat(['…']) : v)) : res};
 }
-async function flushFeedback() { // отзывы копятся и уходят пачкой перед следующим запросом
-  if (!Server.on() || !S.settings.accessKey || !S.fbq.length || flushFeedback.busy) return;
-  flushFeedback.busy = true; const items = S.fbq.slice(0, 50);
-  try { await Server.call('/v1/feedback', {items}); S.fbq.splice(0, items.length); save(); } catch (e) {} finally { flushFeedback.busy = false; }
-}
-function feedback(d, action) { // только блюда общей базы сервера
+function feedback(d, action) { // отзывы копятся и уходят вместе со следующим пополнением запаса (/v1/pool) // только блюда общей базы сервера
   if (!d || DBMAP[d.id] || d.src !== 'server') return;
   S.fbq.push({dish: d.id, action}); if (S.fbq.length > 500) S.fbq.splice(0, S.fbq.length - 500);
 }
@@ -561,18 +561,12 @@ async function checkKey(silent) { // POST /v1/key — при вводе ключ
   if (!S.settings.accessKey) { S.access = {error: 'no_key', checkedAt: Date.now()}; save(); throw new ApiError('no_key'); }
   const j = await Server.call('/v1/key', {});
   S.access = {plan: j.plan, until: j.until, days_left: j.days_left, ai_left: j.ai_limit === null ? null : j.ai_left_today, bound_now: !!j.bound_now, checkedAt: Date.now()};
-  if (j.tastes && Array.isArray(j.tastes.w)) S.taste.lvl = j.tastes.w;
+  if (j.tastes && Array.isArray(j.tastes.w) && !S.taste.pendingLvl) S.taste.lvl = j.tastes.w; // неотправленные вкусы уйдут с запасом
   save(); if (!silent && j.bound_now) toast('Ключ привязан к этому устройству');
-  await sendPendingTastes();
   return j;
 }
 const LEVELS = ['Классика', 'Необычное', 'Экзотика'];
 const CUISINE_LVL = {'Русская': 0, 'Европейская': 0, 'Средиземноморская': 1, 'Восточная': 1, 'Азиатская': 2}; // встроенные блюда → уровни кухни сервера
-async function sendPendingTastes() { // тест, пройденный без сервера, — один раз в /v1/tastes, когда впервые есть сервер и ключ
-  if (!S.taste.pendingLvl || !Server.on() || !S.settings.accessKey || sendPendingTastes.busy) return;
-  sendPendingTastes.busy = true; const w = S.taste.pendingLvl;
-  try { await Server.call('/v1/tastes', {set: {w}}); S.taste.lvl = w; delete S.taste.pendingLvl; save(); } catch (e) {} finally { sendPendingTastes.busy = false; }
-}
 const DIET_API = {all: 'all', nopork: 'no_pork', pesc: 'pescatarian', veg: 'vegetarian', vegan: 'vegan'};
 const MICRO_KEYS = ['vc', 'va', 'ca', 'fe', 'mg', 'k', 'b12', 'd', 'fol', 'n3', 'na'];
 function fromApi(o) { // блюдо API.md §4 → внутренний формат (хранится в кэше целиком)
@@ -604,11 +598,13 @@ async function fetchDishes(ctx, extra) {
   if (j.short && S.feed && !S.feed.shortWarned) { S.feed.shortWarned = true; if (j.short === 'ai_limit') toast(API_MSG.ai_limit); }
   return list;
 }
-async function serverNew(ctx) { // запас этого приёма пуст: один запрос к серверу (под нормы дня), лишние блюда — в запас
-  try { const P = poolState(), list = await fetchDishes(ctx, {count: 3}), q = P.q[ctx.type] = P.q[ctx.type] || [];
+async function serverNew(ctx) { // в запасе нет подходящего: сначала ждём пополнения запаса, и только потом — отдельный запрос под нормы дня
+  const P = poolState();
+  if (!P.done[ctx.type]) { await poolFill(); const d = poolPick(ctx); if (d) return d; }
+  try { const list = await fetchDishes(ctx, {count: 3}), q = P.q[ctx.type] = P.q[ctx.type] || [];
     list.forEach(d => { if (!q.includes(d.id)) q.push(d.id); }); }
   catch (e) { noteServerError(e); }
-  poolFill(); return poolPick(ctx);
+  return poolPick(ctx);
 }
 async function serverLast(ctx) { // в кругах и базе пусто: одно блюдо прямо с сервера (он закрывает приём нейросетью)
   try { const l = await fetchDishes(ctx, {count: 1}); return l.find(d => allowedByDiet(d) && !isBanned(d) && !ctx.seen.has(d.id)) || null; }
@@ -620,10 +616,13 @@ function noteServerError(e) {
 }
 
 /* ---------- Запас блюд с сервера: карточки берутся мгновенно, докачка идёт в фоне ----------
-   На каждое место в рационе недели — около 5 вариантов (4 приёма × 7 дней ≈ 140 блюд).
+   Запас — очередь на 200 блюд, поделённая между приёмами по их числу в дне. Использованные блюда уходят из очереди
+   (в круги или насовсем), оставшиеся стоят первыми; когда в запасе меньше 100 — один запрос /v1/pool добирает
+   до 200, новые встают в конец. С тем же запросом уходят отзывы, вкусы и раз в неделю — цены кругов.
    Смена вкусов, аллергий, типа питания, разделов, бюджета или людей — запас очищается и качается заново. */
-const POOL_PER = 5, POOL_BATCH = 5;
-function poolTarget(type) { return Math.min(70, pattern().filter(m => m[0] === type).length * 7 * POOL_PER); }
+const POOL_TOTAL = 200, POOL_LOW = 100;
+function poolTarget(type) { const pat = pattern(); return Math.round(POOL_TOTAL * pat.filter(m => m[0] === type).length / pat.length); }
+const poolSize = P => Object.values(P.q).reduce((s, q) => s + q.length, 0);
 function poolSig() {
   const st = S.settings, t = S.taste;
   return JSON.stringify([st.serverUrl, st.accessKey, st.diet, [...(st.allergens || [])].sort(), [...(st.forbidden || [])].map(s => String(s).toLowerCase().trim()).sort(), secs(), !!S.collect.otherCuisines,
@@ -639,61 +638,68 @@ function pruneStore() { // кэш блюд не растёт бесконечн�
     ...Object.values((S.pool || {}).q || {}).flat(), ...Object.values((S.feed || {}).seen || {}).flat()]);
   Object.keys(S.dishStore).forEach(id => { if (!keep.has(id)) delete S.dishStore[id]; });
 }
-function poolReq(type) { // блюда «вообще» для приёма: нормы главного едока без учёта съеденного, бюджет на всю неделю
-  const st = S.settings, pat = pattern(), P = poolState(), left = {}, days = S.plan ? S.plan.len : S.settings.planLen || 7;
-  pat.forEach(m => left[m[0]] = (left[m[0]] || 0) + days);
-  const ex = new Set([...(P.q[type] || []), ...allSlots().map(sl => sl.dish.id), ...S.banned.ids]);
-  return {meal: type, sections: secs(), count: POOL_BATCH, eater: eaterReq(-1, -1), deficits: [], meal_share: pat.find(m => m[0] === type)[2] / 100,
+function poolWant(P) { // сколько добрать по приёмам; пусто — запас полон или база кончилась
+  const types = [...new Set(pattern().map(m => m[0]))], want = {};
+  if (poolSize(P) >= POOL_LOW && types.every(t => (P.q[t] || []).length || P.done[t])) return null;
+  types.forEach(t => { const n = P.done[t] ? 0 : poolTarget(t) - (P.q[t] || []).length; if (n > 0) want[t] = n; });
+  return Object.keys(want).length ? want : null;
+}
+function poolReq(P, want) { // блюда «вообще»: нормы главного едока без учёта съеденного, бюджет на всю неделю
+  const st = S.settings, pat = pattern(), left = {}, shares = {}, days = S.plan ? S.plan.len : S.settings.planLen || 7;
+  pat.forEach(m => { left[m[0]] = (left[m[0]] || 0) + days; shares[m[0]] = m[2] / 100; });
+  const ex = new Set([...Object.values(P.q).flat(), ...allSlots().map(sl => sl.dish.id), ...S.banned.ids]);
+  const r = {want, sections: secs(), eater: eaterReq(-1, -1), deficits: [], meal_shares: shares,
     budget_left: Math.max(0, r0(baseBudget())), meals_left: left, meals_per_day: pat.length, allergies: st.allergens || [], diet: DIET_API[st.diet] || 'all',
     forbid: st.forbidden, exclude: [...ex].filter(id => !DBMAP[id]).slice(-300), other_cuisines: !!S.collect.otherCuisines};
+  if (S.fbq.length) r.feedback = S.fbq.slice(0, 500);
+  if (S.taste.pendingLvl) r.tastes = S.taste.pendingLvl;
+  if (Date.now() - (S.pricesAt || 0) >= 7 * 864e5) r.prices = priceIds();
+  return r;
 }
-let poolBusy = false;
-async function poolFill() {
-  if (poolBusy || !Server.on() || !S.settings.accessKey || !S.people.length || !S.onboarded) return;
-  poolBusy = true;
-  try {
-    for (let n = 0; n < 60; n++) {
-      const P = poolState(), types = [...new Set(pattern().map(m => m[0]))].filter(t => !P.done[t] && (P.q[t] || []).length < poolTarget(t));
-      if (!types.length) break;
-      const type = types.sort((a, b) => (P.q[a] || []).length / poolTarget(a) - (P.q[b] || []).length / poolTarget(b))[0];
-      let j;
-      try { j = await Server.call('/v1/dish', poolReq(type), {timeout: 10000}); }
-      catch (e) { if (e.code === 'exhausted' || e.code === 'ai_invalid') { P.done[type] = true; continue; }
-        if (!KEY_ERRORS.includes(e.code)) { poolFill.fails = (poolFill.fails || 0) + 1; setTimeout(poolFill, Math.min(60000, 5000 * poolFill.fails)); } break; }
-      poolFill.fails = 0;
-      if (S.pool !== P) continue;                                                // настройки сменились во время запроса — ответ устарел
-      const q = P.q[type] = P.q[type] || [], before = q.length;
-      (j.dishes || []).map(fromApi).filter(d => d.types.includes(type) && allowedByDiet(d) && !isBanned(d)).forEach(d => { rememberDish(d); if (!q.includes(d.id)) q.push(d.id); });
-      // в базе этого приёма новые блюда кончились (повтор или очередь дошла до нейросети) — дальше не качаем, нейросеть не тратим
-      if (q.length === before || j.short === 'exhausted' || (j.source || []).includes('ai')) P.done[type] = true;
-      save();
+async function poolFill() { // один запрос на пополнение; параллельные вызовы ждут тот же запрос
+  if (poolFill.p) return poolFill.p;
+  if (!Server.on() || !S.settings.accessKey || !S.people.length || !S.onboarded) return;
+  const P = poolState(), want = poolWant(P); if (!want) return;
+  poolFill.p = (async () => {
+    const req = poolReq(P, want); let j;
+    try { j = await Server.call('/v1/pool', req, {timeout: 45000}); }
+    catch (e) { if (!KEY_ERRORS.includes(e.code)) { poolFill.fails = (poolFill.fails || 0) + 1; setTimeout(poolFill, Math.min(60000, 5000 * poolFill.fails)); } return; }
+    poolFill.fails = 0;
+    if (req.feedback) S.fbq.splice(0, req.feedback.length);
+    if (req.tastes && S.taste.pendingLvl === req.tastes) { S.taste.lvl = req.tastes; delete S.taste.pendingLvl; }
+    if (req.prices) { applyPrices(req.prices, j.cost || {}); S.pricesAt = Date.now(); }
+    if (S.pool === P) {                                                          // настройки не сменились во время запроса
+      Object.entries(j.dishes || {}).forEach(([t, list]) => { const q = P.q[t] = P.q[t] || [];
+        list.map(fromApi).filter(d => d.types.includes(t) && allowedByDiet(d) && !isBanned(d)).forEach(d => { rememberDish(d); if (!q.includes(d.id)) q.push(d.id); }); });
+      Object.keys(want).forEach(t => { if (j.short && j.short[t]) P.done[t] = true; });   // база приёма кончилась — до следующего пополнения не просим
     }
-  } finally { poolBusy = false; }
+    save();
+  })().finally(() => { poolFill.p = null; });
+  return poolFill.p;
 }
-function schedulePool() { clearTimeout(schedulePool.t); schedulePool.t = setTimeout(() => { if (S.pool && S.pool.sig === poolSig() && !Object.keys(S.pool.q).some(t => (S.pool.q[t] || []).length < poolTarget(t) / 2 && !S.pool.done[t])) return; poolFill(); }, 1200); }
+function schedulePool() { clearTimeout(schedulePool.t); schedulePool.t = setTimeout(() => { if (S.pool && S.pool.sig === poolSig() && !poolWant(S.pool)) return; poolFill(); }, 1200); }
 function poolPick(ctx, peek) { // первое подходящее блюдо запаса: сначала без повтора основы дня
   const P = poolState(), q = (P.q[ctx.type] || []).filter(id => getDish(id));
   for (const strict of [true, false]) for (const id of q) {
     const d = getDish(id); if (!fitsSlot(d, ctx, true) || (strict && !varietyOk(d, ctx.day, ctx.slot, ctx.extra))) continue;
-    if (!peek) { P.q[ctx.type] = q.filter(x => x !== id); if (P.q[ctx.type].length < poolTarget(ctx.type) / 2) { P.done[ctx.type] = false; schedulePool(); } }
+    if (!peek) { const before = poolSize(P); P.q[ctx.type] = q.filter(x => x !== id); poolLow(P, before); }
     return d;
   }
   return null;
 }
 function poolTake(id, ctx) { // заранее выбранная карточка — только если всё ещё подходит дню
   const P = poolState(), d = getDish(id); if (!d || !(P.q[ctx.type] || []).includes(id) || !fitsSlot(d, ctx, true) || !varietyOk(d, ctx.day, ctx.slot)) return null;
-  P.q[ctx.type] = P.q[ctx.type].filter(x => x !== id); schedulePool(); return d;
+  const before = poolSize(P); P.q[ctx.type] = P.q[ctx.type].filter(x => x !== id); poolLow(P, before); return d;
 }
-async function refreshPrices() { // раз в неделю: актуальные cost для блюд кругов
-  if (!Server.on() || !S.settings.accessKey || Date.now() - (S.pricesAt || 0) < 7 * 864e5) return;
-  const ids = [...new Set(Object.values(S.lib).flatMap(sys => Object.values(sys).flatMap(L => [...L.main, ...L.sec])))].filter(id => S.dishStore[id] && S.dishStore[id].src === 'server').slice(0, 300);
-  if (!ids.length) { S.pricesAt = Date.now(); save(); return; }
-  try {
-    const j = await Server.call('/v1/prices', {ids});
-    const upd = d => { const c = j.cost && j.cost[d.id]; if (c == null || !d.cost) return; const k = c / d.cost; d.ing.forEach(i => i.price = r1(i.price * k)); d.cost = c; d.priceAt = Date.now(); };
-    ids.forEach(id => upd(S.dishStore[id])); allSlots().forEach(sl => upd(sl.dish));
-    S.pricesAt = Date.now(); save();
-  } catch (e) {}
+function poolLow(P, before) { // запас опустился ниже 100 — приёмы, где база «кончилась», пробуем снова (один раз на переход порога)
+  if (before >= POOL_LOW && poolSize(P) < POOL_LOW) P.done = {};
+  schedulePool();
+}
+// Раз в неделю актуальные цены блюд кругов — вместе с пополнением запаса
+const priceIds = () => [...new Set(Object.values(S.lib).flatMap(sys => Object.values(sys).flatMap(L => [...L.main, ...L.sec])))].filter(id => S.dishStore[id] && S.dishStore[id].src === 'server').slice(0, 300);
+function applyPrices(ids, cost) {
+  const upd = d => { const c = cost[d.id]; if (c == null || !d.cost) return; const k = c / d.cost; d.ing.forEach(i => i.price = r1(i.price * k)); d.cost = c; d.priceAt = Date.now(); };
+  ids.forEach(id => S.dishStore[id] && upd(S.dishStore[id])); allSlots().forEach(sl => upd(sl.dish));
 }
 
 /* ---------- UI: общие ---------- */
@@ -1017,8 +1023,8 @@ async function startCollect() {
   const first = firstEmpty();
   if (!first) { S.ui.tab = 'plan'; save(); render(); toast('Рацион уже собран. Заменить блюдо можно в разделе «Рацион».'); return; }
   if (Server.on()) {
-    try { await checkKey(); }
-    catch (e) { if (e.code === 'net') toast('Нет связи с сервером — подбираю из ваших кругов.'); else { accessSheet(e.code, () => startCollect(), e.message); return; } }
+    try { await checkKey(); }                                                   // сбор — только после ответа сервера «ключ действует»
+    catch (e) { accessSheet(KEY_ERRORS.includes(e.code) ? e.code : 'net', () => startCollect(), e.code === 'net' ? 'Нет связи с сервером. Сбор начнётся, когда сервер подтвердит ключ.' : e.message); return; }
   }
   S.firstCollect = S.firstCollect || iso(new Date());
   startFeed(first[0], first[1], false);
@@ -1316,7 +1322,7 @@ function viewSettings() {
     v.innerHTML = `${appbar('Настройки', 'Профиль и приложение', {back: true})}
     <button class="profile" data-person="${me.id}"><span class="mono">${esc(me.name.slice(0, 1).toUpperCase())}</span><span><b>${esc(me.name)}</b><small>${r0(t.E)} ккал · белок ${r0(t.P)} г в день</small></span>${ic('chev', 'sm')}</button>
     <nav class="rows">${SET_PAGES.map(([k, t, s]) => `<button class="row" data-set="${k}"><span class="medal">${ic(SET_IC[k])}</span><span><b>${t}</b><small>${s}</small></span>${ic('chev', 'sm')}</button>`).join('')}</nav>
-    <p class="hint center">Мой рацион · версия 0.9.1</p>`;
+    <p class="hint center">Мой рацион · версия 0.9.2</p>`;
     v.querySelectorAll('[data-set]').forEach(b => b.onclick = () => { S.ui.set = b.dataset.set; save(); render(); });
     v.querySelector('[data-person]').onclick = () => editPerson(me);
     return;
@@ -1529,7 +1535,6 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSheet()
 if (S.feed && S.feed.active) { S.feed.loading = false; if (!S.feed.card && !S.feed.exhausted) S.feed.active = false; }
 auditPlanSafety(); save();
 render();
-setTimeout(() => { refreshPrices(); flushFeedback(); sendPendingTastes(); }, 3000);
 poolFill(); window.addEventListener('online', () => poolFill()); // запас блюд докачивается сразу при открытии и при появлении сети
 if ('serviceWorker' in navigator && location.protocol === 'https:' && !location.hostname.endsWith('claude.ai') && !location.hostname.includes('claudeusercontent')) { // новая версия сайта: сервис-воркер обновляется при каждом открытии, страница один раз перезагружается на свежие файлы
   const had = !!navigator.serviceWorker.controller; let reloaded = false;
