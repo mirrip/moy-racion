@@ -59,7 +59,7 @@ function personTargets(p, goal) {
 
 /* ---------- Состояние ---------- */
 const defaults = () => ({
-  theme: 'dark', accent: 'gold', onboarded: false,
+  theme: 'light', accent: 'gold', onboarded: false,
   people: [],
   settings: {meals: 4, mealsAuto: false, planLen: 7, norms: 'NASEM', diet: 'all', forbidden: [], allergens: [], medical: {}, accessKey: '', serverUrl: DEFAULT_SERVER, botUrl: ''},
   marks: {like: [], notes: {}},
@@ -80,6 +80,7 @@ try { S = Object.assign(defaults(), JSON.parse(localStorage.getItem(KEY) || '{}'
     if (!p.work) { const a = +p.activity || 1.6; Object.assign(p, a < 1.5 ? {work: 'sit', trN: 0} : a < 1.7 ? {work: 'sit', trN: 3, trMin: 45, sport: 'mid'} : a < 1.85 ? {work: 'stand', trN: 4, trMin: 45, sport: 'mid'} : a < 2 ? {work: 'phys', trN: 0} : {work: 'phys', trN: 5, trMin: 60, sport: 'hard'}); } });
   S.rareLog = S.rareLog || [];
   if (!S.srvDefault) { if (!S.settings.serverUrl) S.settings.serverUrl = DEFAULT_SERVER; S.srvDefault = 1; } // 0.8.4: адрес сервера по умолчанию (один раз)
+  if (!S.themeV) { S.theme = 'light'; S.themeV = 2; } // 0.9.3: новая светлая тема «крем, олива, коралл» — один раз для всех
   if (S.srvDefault < 2) { if (S.settings.serverUrl.trim().replace(/\/$/, '') === OLD_SERVER) S.settings.serverUrl = DEFAULT_SERVER; S.srvDefault = 2; } // 0.9.2: старый адрес → переходник
   if (!Array.isArray(S.collect.sections) || !S.collect.sections.length) S.collect.sections = typeof S.collect.section === 'number' ? Array.from({length: S.collect.section + 1}, (_, i) => i) : [0, 1];
   delete S.collect.section; delete S.collect.cuisine;
@@ -746,7 +747,7 @@ function render() {
   const vk = (S.feed && S.feed.active) ? 'feed' : S.ui.tab + (S.ui.set || ''); if (vk !== lastView) { const sc = $('#scroller'); if (sc) sc.scrollTop = 0; window.scrollTo(0, 0); lastView = vk; }
   document.querySelectorAll('.tab').forEach(b => b.setAttribute('aria-current', b.dataset.tab === S.ui.tab ? 'page' : 'false'));
   const v = $('#view');
-  if (!S.onboarded || !S.people.length) { v.innerHTML = S.ui.onbLife && S.people.length ? viewLifeOnboard() : viewOnboard(); bindOnboard(); $('#nav').hidden = true; return; }
+  if (!S.onboarded || !S.people.length) { v.innerHTML = viewOnboard(); bindOnboard(); $('#nav').hidden = true; return; }
   $('#nav').hidden = false;
   const feeding = !!(S.feed && S.feed.active); document.body.classList.toggle('feeding', feeding);
   if (feeding) { const old = $('#feedwrap');
@@ -793,23 +794,88 @@ function bindLife(root, after) {
     const p = S.people.find(x => x.id === sel.closest('[data-life]').dataset.life), k = sel.dataset.k;
     p[k] = k === 'trN' || k === 'trMin' ? +sel.value : sel.value; if (k === 'trN' && p.trN && !p.trMin) p.trMin = 45; p.goal = safeGoal(p, p.goal); save(); after(); });
 }
-function viewLifeOnboard() {
-  return `<section class="onb"><p class="eyebrow">Шаг 2 из 2</p><h1 class="gt">Образ жизни</h1>
-  <p class="lead">По работе и тренировкам приложение рассчитает калории — в том числе для спортсменов.</p>${lifeHtml(S.people)}
-  <button class="btn primary wide" id="onb-life">Готово</button></section>`;
+/* ---------- Онбординг: 6 шагов (S.ui.onb: 0 — приветствие) ---------- */
+const ONB_DISLIKE = ['Грибы', 'Лук', 'Чеснок', 'Оливки', 'Баклажаны', 'Кинза', 'Острое', 'Печень', 'Свинина', 'Тофу'];
+const DIET_LABELS = [['all', 'Обычное'], ['nopork', 'Без свинины'], ['pesc', 'Без мяса с рыбой'], ['veg', 'Вегетарианское'], ['vegan', 'Веганское']];
+function onbStyle() {
+  if (document.getElementById('onb-style')) return;
+  const s = document.createElement('style'); s.id = 'onb-style';
+  s.textContent = `.onb-top{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.onb-sec{display:grid;gap:8px}.onb-sec h4{margin:6px 0 0}
+.onb-err{color:#d4574f}.onb-muted{background:var(--surface2);border:1px solid var(--line);border-radius:var(--r);padding:12px 14px;display:grid;gap:8px}
+.onb-kcal{font-family:var(--display);font-size:3.4rem;line-height:1;color:var(--gold);text-align:center}
+.onb-kcal small{display:block;font-family:inherit;font-size:1rem;color:var(--muted);margin-top:6px}
+.onb-pills{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.onb-pill{background:var(--surface);border:1px solid var(--good);border-radius:var(--r);padding:10px 6px;text-align:center;color:var(--fg)}
+.onb-pill b{display:block;font-size:1.15rem;color:var(--good)}.onb-pill span{font-size:.8rem;color:var(--muted)}
+.onb-add{display:flex;gap:8px}.onb-add input{flex:1;min-width:0}`;
+  document.head.appendChild(s);
 }
 function viewOnboard() {
-  return `<section class="onb"><div class="crest">${ic('leaf')}</div><p class="eyebrow">Мой рацион</p><h1 class="gt">Рацион на неделю, собранный под вашу семью</h1>
-  <p class="lead">Расскажите о себе — по этим данным приложение рассчитает калории, белки, жиры, углеводы и клетчатку. Семью добавите позже в настройках.</p>
-  ${personForm({sex: 'm'})}<button class="btn primary wide" id="onb-go">Начать</button></section>`;
+  onbStyle();
+  let n = +S.ui.onb || 0; if (n > 4 && !S.people.length) n = 4; if (n < 0 || n > 6) n = 0; S.ui.onb = n;
+  const top = k => `<div class="onb-top"><p class="eyebrow">Шаг ${k} из 6</p><button class="btn ghost sm" id="onb-back">Назад</button></div>`;
+  const next = (id, t = 'Далее') => `<button class="btn primary wide" id="${id}">${t}</button>`;
+  if (n === 0) return `<section class="onb"><div class="crest">${ic('leaf')}</div><p class="eyebrow">Мой рацион</p><h1 class="gt">Рацион на неделю под вашу семью</h1>
+  <p class="lead">Ответьте на несколько вопросов — соберём меню под ваши вкусы, нормы и бюджет.</p>${next('onb-start', 'Начать')}</section>`;
+  if (n === 1) return `<section class="onb">${top(1)}<h1 class="gt">Ключ доступа</h1><p class="lead">Вставьте ключ — приложение подключится к базе блюд.</p>
+  <label class="field col"><input id="onb-key" type="password" autocomplete="off" placeholder="Ключ доступа" value="${esc(S.settings.accessKey || '')}"></label><p class="hint onb-err err" id="onb-kerr" hidden></p>
+  ${next('onb-keygo', 'Подключить')}
+  <div class="onb-muted"><span class="hint">Нет ключа? Покупка прямо здесь появится скоро. Пока ключ можно получить в Telegram-боте.</span><a class="btn ghost sm" href="${esc(S.settings.botUrl || 'https://t.me/')}" target="_blank" rel="noopener">Открыть Telegram-бота</a></div></section>`;
+  if (n === 2) return `<section class="onb">${top(2)}<h1 class="gt">Тест вкусов</h1><p class="lead">24 блюда: свайп вправо — нравится, влево — нет. Займёт минуту.</p>
+  ${next('onb-tt', 'Пройти тест')}<button class="btn ghost wide" id="onb-ttskip">Пропустить</button></section>`;
+  if (n === 3) {
+    const st = S.settings, low = st.forbidden.map(w => String(w).toLowerCase()), custom = st.forbidden.filter(w => !ONB_DISLIKE.some(d => d.toLowerCase() === String(w).toLowerCase()));
+    return `<section class="onb">${top(3)}<h1 class="gt">Что исключить?</h1>
+  <div class="onb-sec"><h4>Тип питания</h4><div class="chips">${DIET_LABELS.map(([k, t]) => `<button class="chip${st.diet === k ? ' on' : ''}" data-diet="${k}">${t}</button>`).join('')}</div></div>
+  <div class="onb-sec"><h4>Аллергии</h4><div class="chips">${ALLERGENS.map(([k, t]) => `<button class="chip${st.allergens.includes(k) ? ' on' : ''}" data-all="${k}">${esc(t)}</button>`).join('')}</div></div>
+  <div class="onb-sec"><h4>Не люблю</h4><div class="chips">${ONB_DISLIKE.map(w => `<button class="chip${low.includes(w.toLowerCase()) ? ' on' : ''}" data-dis="${esc(w)}">${w}</button>`).join('')}</div>
+  <div class="onb-add"><input id="onb-forb" placeholder="Свой продукт, например, кабачки" enterkeyhint="done"><button class="btn ghost sm" id="onb-forb-add">Добавить</button></div>
+  ${custom.length ? `<div class="chips">${custom.map(w => `<button class="chip x" data-rmforb="${esc(w)}">${esc(w)}</button>`).join('')}</div>` : ''}</div>
+  ${next('onb-next')}</section>`;
+  }
+  if (n === 4) return `<section class="onb">${top(4)}<h1 class="gt">О вас</h1><p class="lead">По этим данным рассчитаем калории, белки, жиры и углеводы.</p>
+  ${personForm(S.people[0] || {sex: 'm'})}${next('onb-next')}</section>`;
+  if (n === 5) return `<section class="onb">${top(5)}<h1 class="gt">Образ жизни</h1>
+  <p class="lead">По работе и тренировкам приложение рассчитает калории — в том числе для спортсменов.</p>${lifeHtml(S.people)}${next('onb-next')}</section>`;
+  const t = personTargets(S.people[0]);
+  return `<section class="onb">${top(6)}<h1 class="gt">Ваша дневная норма</h1>
+  <div class="onb-kcal">${r0(t.E)}<small>ккал в день</small></div>
+  <div class="onb-pills"><div class="onb-pill"><b>${r0(t.P)} г</b><span>Белки</span></div><div class="onb-pill"><b>${r0(t.F)} г</b><span>Жиры</span></div><div class="onb-pill"><b>${r0(t.C)} г</b><span>Углеводы</span></div></div>
+  <p class="hint" style="text-align:center">Клетчатка: ${r0(t.fib)} г</p>
+  <p class="hint">Норма рассчитана по рекомендациям NASEM. Изменить данные можно в настройках.</p>${next('onb-done', 'Всё верно')}</section>`;
 }
 function bindOnboard() {
-  const life = $('#onb-life');
-  if (life) { bindLife($('#view'), () => { const sc = window.scrollY; render(); window.scrollTo(0, sc); }); life.onclick = () => { S.onboarded = true; delete S.ui.onbLife; save(); render(); offerTasteTest(); }; return; }
-  $('#onb-go').onclick = () => { const p = readPersonMerged(null); if (!p) return; S.people = [p]; S.ui.onbLife = true; save(); render(); };
+  const n = +S.ui.onb || 0, go = k => { S.ui.onb = k; save(); render(); window.scrollTo(0, 0); }, keep = () => { const sc = window.scrollY; render(); window.scrollTo(0, sc); }, on = (id, f) => { const e = $('#' + id); if (e) e.onclick = f; };
+  on('onb-back', () => go(Math.max(0, n - 1)));
+  on('onb-start', () => go(1));
+  if (n === 1) {
+    const inp = $('#onb-key'), err = $('#onb-kerr'), btn = $('#onb-keygo');
+    const run = async () => {
+      if (!inp || btn.disabled) return; S.settings.accessKey = inp.value.trim(); save(); err.hidden = true; btn.disabled = true; btn.textContent = 'Проверяю…';
+      try { await checkKey(false); toast('Ключ действует'); go(2); }
+      catch (e) { btn.disabled = false; btn.textContent = 'Подключить'; err.textContent = (e && e.message) || 'Не удалось проверить ключ'; err.hidden = false; }
+    };
+    if (btn) btn.onclick = run; if (inp) inp.onkeydown = e => { if (e.key === 'Enter') run(); };
+  }
+  on('onb-tt', () => { tasteTest('self', () => go(3)); });
+  on('onb-ttskip', () => go(3));
+  if (n === 3) {
+    const st = S.settings, view = $('#view');
+    view.querySelectorAll('[data-diet]').forEach(b => b.onclick = () => { st.diet = b.dataset.diet; save(); keep(); });
+    view.querySelectorAll('[data-all]').forEach(b => b.onclick = () => { const k = b.dataset.all; st.allergens = st.allergens.includes(k) ? st.allergens.filter(x => x !== k) : [...st.allergens, k]; save(); keep(); });
+    view.querySelectorAll('[data-dis]').forEach(b => b.onclick = () => { const w = b.dataset.dis, lw = w.toLowerCase(), has = st.forbidden.some(x => String(x).toLowerCase() === lw); st.forbidden = has ? st.forbidden.filter(x => String(x).toLowerCase() !== lw) : [...st.forbidden, w]; save(); keep(); });
+    view.querySelectorAll('[data-rmforb]').forEach(b => b.onclick = () => { st.forbidden = st.forbidden.filter(x => x !== b.dataset.rmforb); save(); keep(); });
+    const add = () => { const i = $('#onb-forb'), w = i ? i.value.trim() : ''; if (!w) return; if (!st.forbidden.some(x => String(x).toLowerCase() === w.toLowerCase())) { st.forbidden = [...st.forbidden, w]; save(); } keep(); };
+    on('onb-forb-add', add); const fi = $('#onb-forb'); if (fi) fi.onkeydown = e => { if (e.key === 'Enter') add(); };
+    on('onb-next', () => go(4));
+  }
+  if (n === 4) on('onb-next', () => { const p = readPersonMerged(S.people[0] || null); if (!p) return; S.people[0] = p; go(5); });
+  if (n === 5) { bindLife($('#view'), keep); on('onb-next', () => go(6)); }
+  on('onb-done', () => { S.onboarded = true; delete S.ui.onb; save(); render(); toast('Готово! Можно собирать рацион'); });
 }
 function offerTasteTest() { // после онбординга: тест вкусов, можно пропустить
-  sheet(`<p class="eyebrow">Тест вкусов</p><h3>Что вам по вкусу?</h3><p class="hint">1–2 минуты: выберите из пар блюд то, что больше нравится. Пройти позже можно в настройках, «Мои вкусы».</p><div class="actions two"><button class="btn ghost" id="tt-skip">Пропустить</button><button class="btn primary" id="tt-go">Пройти</button></div>`, b => { $('#tt-skip', b).onclick = closeSheet; $('#tt-go', b).onclick = () => tasteTest('self'); });
+  sheet(`<p class="eyebrow">Тест вкусов</p><h3>Что вам по вкусу?</h3><p class="hint">1 минута: 24 блюда — свайпните вправо то, что нравится. Пройти позже можно в настройках, «Мои вкусы».</p><div class="actions two"><button class="btn ghost" id="tt-skip">Пропустить</button><button class="btn primary" id="tt-go">Пройти</button></div>`, b => { $('#tt-skip', b).onclick = closeSheet; $('#tt-go', b).onclick = () => tasteTest('self'); });
 }
 
 /* ---------- Рацион ---------- */
@@ -1322,7 +1388,7 @@ function viewSettings() {
     v.innerHTML = `${appbar('Настройки', 'Профиль и приложение', {back: true})}
     <button class="profile" data-person="${me.id}"><span class="mono">${esc(me.name.slice(0, 1).toUpperCase())}</span><span><b>${esc(me.name)}</b><small>${r0(t.E)} ккал · белок ${r0(t.P)} г в день</small></span>${ic('chev', 'sm')}</button>
     <nav class="rows">${SET_PAGES.map(([k, t, s]) => `<button class="row" data-set="${k}"><span class="medal">${ic(SET_IC[k])}</span><span><b>${t}</b><small>${s}</small></span>${ic('chev', 'sm')}</button>`).join('')}</nav>
-    <p class="hint center">Мой рацион · версия 0.9.2</p>`;
+    <p class="hint center">Мой рацион · версия 0.9.3</p>`;
     v.querySelectorAll('[data-set]').forEach(b => b.onclick = () => { S.ui.set = b.dataset.set; save(); render(); });
     v.querySelector('[data-person]').onclick = () => editPerson(me);
     return;
@@ -1330,7 +1396,7 @@ function viewSettings() {
   const title = SET_PAGES.find(x => x[0] === pg)[1];
   const meds = [['kidney','Болезни почек'],['diabetes','Диабет на инсулине или сульфонилмочевине'],['ed','Расстройство пищевого поведения'],['preg','Беременность или кормление'],['warfarin','Приём варфарина'],['gi','Целиакия, подагра, тяжёлые болезни печени или ЖКТ']];
   let body = '';
-  if (pg === 'look') body = `<h4>Тема</h4><div class="themes">${[['dark','Тёмная','Графит и золото'],['light','Светлая','Жемчуг и золото'],['system','Как в системе','Меняется сама']].map(([k, t, s]) => `<button class="theme-card t-${k}${S.theme === k ? ' on' : ''}" data-theme-set="${k}"><i></i><b>${t}</b><small>${s}</small></button>`).join('')}</div>
+  if (pg === 'look') body = `<h4>Тема</h4><div class="themes">${[['light','Светлая','Крем, олива, коралл'],['dark','Тёмная','Графит и золото'],['system','Как в системе','Меняется сама']].map(([k, t, s]) => `<button class="theme-card t-${k}${S.theme === k ? ' on' : ''}" data-theme-set="${k}"><i></i><b>${t}</b><small>${s}</small></button>`).join('')}</div>
     <h4>Акцент</h4><div class="accents">${[['gold','Классическое золото'],['champagne','Шампань'],['rose','Розовое золото']].map(([k, t]) => `<button class="accent a-${k}${(S.accent || 'gold') === k ? ' on' : ''}" data-accent="${k}"><i></i><span>${t}</span></button>`).join('')}</div>`;
   if (pg === 'family') body = `<ul class="people">${S.people.map(p => { const t = personTargets(p); return `<li><button data-person="${p.id}"><span class="mono">${esc(p.name.slice(0, 1).toUpperCase())}</span><span><b>${esc(p.name)}</b><small>${p.sex === 'm' ? 'М' : 'Ж'}, ${p.age} лет, ${p.weight} кг · ${r0(t.E)} ккал, белок ${r0(t.P)} г</small></span>${ic('chev', 'sm')}</button></li>`; }).join('')}</ul>
     ${S.people.length < 10 ? '<button class="btn ghost wide" id="st-add">Добавить человека</button>' : '<p class="hint">Максимум 10 человек.</p>'}
@@ -1426,40 +1492,105 @@ function bindTastes(v) {
   $('#tx-exp').onclick = exportTastes; $('#tx-imp').onclick = importTastes;
   $('#tx-reset').onclick = () => sheet(`<h3>Очистить круги?</h3><p>Основные и вторичные круги всех кухонь будут пустыми и начнут формироваться заново. Удалённые навсегда блюда останутся удалёнными.</p><div class="actions two"><button class="btn ghost" id="cr-no">Отмена</button><button class="btn primary" id="cr-yes">Очистить</button></div>`, b => { $('#cr-no', b).onclick = closeSheet; $('#cr-yes', b).onclick = () => { S.lib = {}; save(); closeSheet(); render(); }; });
 }
-async function tasteTest(mode) {
-  S.taste.mode = mode;
-  const TYPES = ['b', 'l', 'd', 'b', 'l', 'd', 's', 'l'];
-  let pairs = [], server = false;
+function ttStyle() { // стили теста вкусов — один раз из JS
+  if (document.getElementById('tt-style')) return;
+  const s = document.createElement('style'); s.id = 'tt-style';
+  s.textContent = `.tt-stack{position:relative;height:336px;margin:14px 0 18px}
+.tt-card{position:absolute;inset:0;display:flex;flex-direction:column;overflow:hidden;border-radius:var(--r);background:var(--surface);border:1px solid var(--line);touch-action:none;user-select:none;-webkit-user-select:none;cursor:grab;will-change:transform}
+.tt-card.tt-back{transform:scale(.95) translateY(10px);pointer-events:none;cursor:default}
+.tt-img{position:relative;height:220px;flex:none;background:var(--surface2);overflow:hidden}
+.tt-img img{width:100%;height:100%;object-fit:cover;display:block;pointer-events:none}
+.tt-ph{width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:var(--surface2);color:var(--muted);font-family:var(--display);font-size:92px;line-height:1}
+.tt-name{margin:14px 16px 4px;font-weight:700;font-size:18px;line-height:1.25;color:var(--fg)}
+.tt-meta{margin:0 16px;font-size:13px;color:var(--muted)}
+.tt-stamp{position:absolute;top:16px;padding:4px 12px;border:2px solid;border-radius:10px;font-weight:800;font-size:18px;letter-spacing:.04em;text-transform:uppercase;opacity:0;pointer-events:none;background:var(--surface)}
+.tt-like{left:16px;color:var(--good);transform:rotate(-12deg)}
+.tt-nope{right:16px;color:var(--muted);transform:rotate(12deg)}
+.tt-btns{display:flex;justify-content:center;gap:28px}
+.tt-btn{width:64px;height:64px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:26px;line-height:1;cursor:pointer;padding:0}
+.tt-btn.tt-x{background:var(--surface);border:1px solid var(--line);color:var(--muted)}
+.tt-btn.tt-h{background:var(--gold);border:0;color:#fff}
+.tt-skip{display:block;margin:16px auto 0;background:none;border:0;color:var(--muted);font-size:14px;cursor:pointer;text-decoration:underline}`;
+  document.head.appendChild(s);
+}
+async function tasteTest(mode, onDone) {
+  S.taste.mode = mode; ttStyle();
+  const TYPES = ['b', 'l', 'd', 's'], N = 24, LVN = ['Классика', 'Необычное', 'Экзотика'];
+  const lv = d => d.lvl != null ? d.lvl : CUISINE_LVL[d.cuisine];
+  let cards = [], server = false;
   if (Server.on() && S.settings.accessKey) {
-    sheet(`<p class="eyebrow">Тест вкусов</p><h3>Подбираю пары блюд…</h3><p class="hint">Это займёт пару секунд.</p>`);
-    try { const st = S.settings, j = await Server.call('/v1/taste-test', {allergies: st.allergens || [], diet: DIET_API[st.diet] || 'all', forbid: st.forbidden});
-      pairs = (j.pairs || []).map((p, i) => { const a = fromApi(p[0]), b = fromApi(p[1]); rememberDish(a); rememberDish(b); return [a, b, TYPES[i] || a.types[0]]; }); server = pairs.length > 0; }
-    catch (e) { closeSheet(); toast(e.message + (KEY_ERRORS.includes(e.code) ? '' : ' Пройду тест на встроенных блюдах.')); if (KEY_ERRORS.includes(e.code)) return; }
+    sheet(`<p class="eyebrow">Тест вкусов</p><h3>Собираю блюда для теста…</h3><p class="hint">Это займёт пару секунд.</p>`);
+    const seen = new Map(); // уникальные блюда по id; два запроса сразу, параллельно (через переходник каждый ~5 с)
+    try { const st = S.settings, body = {allergies: st.allergens || [], diet: DIET_API[st.diet] || 'all', forbid: st.forbidden};
+      const res = await Promise.allSettled([Server.call('/v1/taste-test', body), Server.call('/v1/taste-test', body)]);
+      res.forEach(r => r.status === 'fulfilled' && (r.value.pairs || []).forEach(p => p.forEach(x => { const d = fromApi(x); if (!seen.has(d.id)) { seen.set(d.id, d); rememberDish(d); } })));
+      if (!seen.size) throw res.find(r => r.status === 'rejected').reason; }
+    catch (e) { if (!seen.size) { closeSheet(); toast(e.message + (KEY_ERRORS.includes(e.code) ? '' : ' Пройду тест на встроенных блюдах.')); if (KEY_ERRORS.includes(e.code)) { onDone && onDone(); return; } } }
+    cards = [...seen.values()]; server = cards.length > 0;
   }
-  if (!server) { const pool = Object.values(DBMAP).filter(d => allowedByDiet(d) && !isBanned(d));
-    TYPES.forEach(t => { const c = pool.filter(d => d.types.includes(t) && !pairs.flat().includes(d)).sort(() => Math.random() - 0.5); const a = c[0], b = c.find(x => x !== a && x.cuisine !== a.cuisine) || c[1]; if (a && b) pairs.push([a, b, t]); }); }
-  const lvl = [34, 33, 33], w = {}; let i = 0; // веса считаются заново: прошлые результаты и выборы блюд не учитываются
+  if (!server) cards = Object.values(DBMAP).filter(d => allowedByDiet(d) && !isBanned(d)).sort(() => Math.random() - 0.5);
+  // колода: кухни по кругу (классика → необычное → экзотика), приёмы пищи чередуются
+  const bk = [[], [], []]; cards.forEach(d => bk[lv(d) != null ? lv(d) : 0].push(d));
+  const deck = [], typ = {}; let bi = 0, prev = '';
+  while (deck.length < N && bk.some(b => b.length)) {
+    for (let t = 0; t < 3 && !bk[bi % 3].length; t++) bi++;
+    const b = bk[bi % 3]; bi++; if (!b.length) break;
+    const x = b.findIndex(d => d.types[0] !== prev), d = b.splice(x < 0 ? 0 : x, 1)[0];
+    typ[d.id] = prev = d.types[0]; deck.push(d);
+  }
+  if (!deck.length) { closeSheet(); toast('Не хватает блюд для теста'); onDone && onDone(); return; }
+  const seenL = [0, 0, 0], likedL = [0, 0, 0], w = {}; let i = 0, busy = false, likes = 0, answered = 0, root = null;
+  let lvl = [34, 33, 33];
   const finish = async () => {
     S.taste.done = true; S.taste.w = w; closeSheet();
+    lvl = seenL.map((n, k) => n ? 5 + 85 * likedL[k] / n : 33); // вес кухни — доля «нравится» среди показанных её блюд (24 карточки не упираются в потолок)
     if (!server) S.taste.pendingLvl = lvl.map(v => Math.max(5, Math.min(90, r0(v)))); // уйдёт на сервер при первом ключе
     if (server) { const w = lvl.map(v => Math.max(5, Math.min(90, r0(v)))); S.taste.lvl = w; delete S.taste.pendingLvl; try { await Server.call('/v1/tastes', {set: {w}}); } catch (e) { toast('Вкусы сохранены в телефоне, на сервер отправлю позже'); S.taste.pendingLvl = w; } }
-    save(); render(); toast('Готово: вкусы учтены');
+    save(); render(); toast('Готово: вкусы учтены'); onDone && onDone();
   };
-  const step = () => {
-    if (i >= pairs.length) { finish(); return; }
-    const [a, b] = pairs[i];
-    sheet(`<p class="eyebrow">${mode === 'family' ? 'Выбирайте вместе' : 'Тест вкусов'} · ${i + 1} из ${pairs.length}</p><h3>Что больше по душе?</h3>
-     <div class="pair">${[a, b].map((d, k) => `<button class="pcard" data-p="${k}"><b>${esc(d.name)}</b><small>${d.time} мин · ${r0(nut(d).kcal)} ккал</small></button>`).join('')}</div>
-     <div class="actions two"><button class="btn ghost" data-p="both">Оба</button><button class="btn ghost" data-p="none">Ни одно</button></div>`, el => el.querySelectorAll('[data-p]').forEach(x => x.onclick = () => {
-        if (i >= pairs.length || pairs[i][0] !== a) return; // повторное нажатие во время закрытия
-        const p = x.dataset.p, t = pairs[i][2], pick = p === 'both' ? [a, b] : p === 'none' ? [] : [[a, b][+p]];
-        const lv = d => d.lvl != null ? d.lvl : CUISINE_LVL[d.cuisine];
-        pick.forEach(d => { libTake(d, d.types.includes(t) ? t : d.types[0]); if (lv(d) != null) lvl[lv(d)] += 12; if (d.lvl == null) w[d.cuisine] = Math.min(0.6, (w[d.cuisine] || 0) + 0.12); });
-        if (p === 'none') [a, b].forEach(d => { if (lv(d) != null) lvl[lv(d)] -= 5; if (d.lvl == null) w[d.cuisine] = Math.max(-0.6, (w[d.cuisine] || 0) - 0.05); });
-        i++; save(); step(); }));
+  const onKey = e => {
+    if (!root || !root.isConnected || $('#sheet').hidden) { cleanup(); return; }
+    if (e.key === 'ArrowRight') { e.preventDefault(); answer(true); } else if (e.key === 'ArrowLeft') { e.preventDefault(); answer(false); }
   };
-  if (!pairs.length) { closeSheet(); toast('Не хватает блюд для теста'); return; }
-  step();
+  const cleanup = () => document.removeEventListener('keydown', onKey);
+  const cardHtml = (d, back) => `<div class="tt-card${back ? ' tt-back' : ''}" ${back ? 'aria-hidden="true"' : 'id="tt-top"'}><div class="tt-img">${d.img ? `<img src="${esc(d.img)}" alt="" draggable="false">` : `<div class="tt-ph">${esc(([...d.name][0] || '').toUpperCase())}</div>`}${back ? '' : '<span class="tt-stamp tt-like">Нравится</span><span class="tt-stamp tt-nope">Не моё</span>'}</div><div class="tt-name">${esc(d.name)}</div><div class="tt-meta">${d.time} мин · ${r0(nut(d).kcal)} ккал · ${LVN[d.lvl] || ''}</div></div>`;
+  const paint = () => {
+    $('#tt-eb', root).textContent = mode === 'family' ? 'Выбирайте вместе' : `Тест вкусов · ${i + 1} из ${deck.length}`;
+    $('#tt-stack', root).innerHTML = (deck[i + 1] ? cardHtml(deck[i + 1], true) : '') + cardHtml(deck[i], false);
+    bindDrag($('#tt-top', root));
+  };
+  const answer = like => {
+    if (busy || i >= deck.length) return; busy = true;
+    const c = $('#tt-top', root); if (c) { const st = $(like ? '.tt-like' : '.tt-nope', c); if (st) st.style.opacity = 1; c.style.transition = 'transform .25s ease-out, opacity .25s'; c.style.transform = `translateX(${(like ? 1 : -1) * Math.round(window.innerWidth * 1.1)}px) rotate(${like ? 18 : -18}deg)`; c.style.opacity = 0; }
+    setTimeout(async () => {
+      const d = deck[i]; answered++;
+      if (like) { likes++; libTake(d, d.types.includes(typ[d.id]) ? typ[d.id] : d.types[0]); if (lv(d) != null) { seenL[lv(d)]++; likedL[lv(d)]++; } if (d.lvl == null) w[d.cuisine] = Math.min(0.6, (w[d.cuisine] || 0) + 0.12); }
+      else { if (lv(d) != null) seenL[lv(d)]++; if (d.lvl == null) w[d.cuisine] = Math.max(-0.6, (w[d.cuisine] || 0) - 0.05); }
+      i++; save();
+      if (i >= deck.length) { cleanup(); await finish(); if (!likes) toast('Соберём меню по остальным ответам'); return; }
+      busy = false; paint();
+    }, 250);
+  };
+  const bindDrag = c => {
+    if (!c) return; let x0 = null, dx = 0;
+    const stamps = () => { $('.tt-like', c).style.opacity = Math.max(0, Math.min(1, dx / 90)); $('.tt-nope', c).style.opacity = Math.max(0, Math.min(1, -dx / 90)); };
+    c.onpointerdown = e => { if (busy) return; x0 = e.clientX; dx = 0; try { c.setPointerCapture(e.pointerId); } catch (_) {} c.style.transition = 'none'; c.style.cursor = 'grabbing'; };
+    c.onpointermove = e => { if (x0 == null || busy) return; dx = e.clientX - x0; c.style.transform = `translateX(${dx}px) rotate(${dx / 20}deg)`; stamps(); };
+    const up = () => { if (x0 == null) return; x0 = null; c.style.cursor = '';
+      if (busy) return;
+      if (Math.abs(dx) > 90) answer(dx > 0);
+      else { c.style.transition = 'transform .2s ease-out'; c.style.transform = ''; dx = 0; stamps(); } };
+    c.onpointerup = up; c.onpointercancel = up;
+  };
+  sheet(`<p class="eyebrow" id="tt-eb"></p><h3>Нравится?</h3><p class="hint">Свайп вправо — нравится, влево — не моё.</p>
+   <div class="tt-stack" id="tt-stack"></div>
+   <div class="tt-btns"><button class="tt-btn tt-x" id="tt-no" aria-label="Не моё">✕</button><button class="tt-btn tt-h" id="tt-yes" aria-label="Нравится">♥</button></div>
+   <button class="tt-skip" id="tt-end">Пропустить тест</button>`, el => {
+    root = el; paint();
+    $('#tt-no', el).onclick = () => answer(false); $('#tt-yes', el).onclick = () => answer(true);
+    $('#tt-end', el).onclick = () => { if (busy) return; cleanup(); if (answered) finish(); else { closeSheet(); onDone && onDone(); } };
+    document.addEventListener('keydown', onKey);
+  }, {full: true});
 }
 const XKEY = 'moy-racion · обмен вкусами · v1';
 async function xKey() { const h = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(XKEY)); return crypto.subtle.importKey('raw', h, 'AES-GCM', false, ['encrypt', 'decrypt']); }
