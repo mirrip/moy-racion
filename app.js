@@ -64,7 +64,7 @@ const defaults = () => ({
   marks: {like: [], notes: {}},
   collect: {budget: 6000, sections: [0, 1], homeOn: false, home: [], cook2: false, otherCuisines: false},
   lib: {}, banned: {ids: [], names: []}, cool: {}, seenEver: [], dishStore: {}, imports: [], taste: {w: {}, mode: 'self', done: false}, aiTimes: [], firstCollect: null,
-  plan: null, feed: null, lastWeek: null, access: null, fbq: [], apiLog: null, pricesAt: 0, srvQueue: {},
+  plan: null, feed: null, lastWeek: null, access: null, fbq: [], apiLog: null, pricesAt: 0, pool: null,
   shop: {checked: {}, group: false, range: 'all', bought: {}, lastBought: null},
   ui: {tab: 'plan', day: 0, off: 0, open: {}, set: null}
 });
@@ -83,11 +83,11 @@ try { S = Object.assign(defaults(), JSON.parse(localStorage.getItem(KEY) || '{}'
   delete S.collect.section; delete S.collect.cuisine;
   Object.keys(S.lib || {}).forEach(k => { if (!k.startsWith('any|')) delete S.lib[k]; }); // круги по кухням больше не нужны
   if (S.feed && S.feed.seen && !S.feed.v4) S.feed = null;
-  delete S.settings.apiKey; delete S.lastSync;
+  delete S.settings.apiKey; delete S.lastSync; delete S.srvQueue;
 })();
 // при каждом открытии выбран сегодняшний день
 S.ui.off = 0; if (S.plan) S.ui.day = Math.max(0, Math.min(S.plan.len - 1, Math.round((new Date(new Date().setHours(12, 0, 0, 0)) - new Date(S.plan.start + 'T12:00:00')) / 864e5)));
-const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} };
+const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} schedulePool(); };
 
 /* ---------- Даты ---------- */
 const DOW = ['Вс','Пн','Вт','Ср','Чт','Пт','Сб'];
@@ -415,8 +415,27 @@ function homeBonus(d, day) {
   const h = S.collect.home.map(x => x.toLowerCase());
   return d.ing.some(i => h.some(x => i.name.toLowerCase().includes(x) || x.includes(i.name.toLowerCase()))) ? -0.4 : 0;
 }
-const rank = (list, ctx) => list.map(d => [d, scoreDish(d, ctx.tg) + budgetPenalty(d, ctx.slot) + homeBonus(d, ctx.day)]).sort((a, b) => a[1] - b[1]).map(x => x[0]);
-function pickCircle(which, ctx) { for (const id of libMerged(ctx.type, which)) { const d = getDish(id); if (fitsSlot(d, ctx)) return d; } return null; }
+const rank = (list, ctx) => list.map(d => [d, scoreDish(d, ctx.tg) + budgetPenalty(d, ctx.slot) + homeBonus(d, ctx.day) + (varietyOk(d, ctx.day, ctx.slot) ? 0 : 0.5)]).sort((a, b) => a[1] - b[1]).map(x => x[0]);
+function pickCircle(which, ctx) { // сначала блюда без повтора основы дня, потом любые
+  const ids = libMerged(ctx.type, which);
+  for (const strict of [true, false]) for (const id of ids) { const d = getDish(id); if (fitsSlot(d, ctx) && (!strict || varietyOk(d, ctx.day, ctx.slot))) return d; }
+  return null;
+}
+/* Разнообразие дня: одна основа (крупа, гарнир, белок) — не больше одного раза за день */
+const BASES = [['гречк', 'гречка'], ['(^|[^а-я])рис', 'рис'], ['овсян|овес|овёс', 'овсянка'], ['булгур', 'булгур'], ['перлов', 'перловка'], ['пшен', 'пшено'], ['киноа', 'киноа'], ['кускус', 'кускус'],
+  ['макарон|спагет|лапш|паста', 'макароны'], ['картоф', 'картофель'], ['(^|[^а-я])нут', 'нут'], ['фасол', 'фасоль'], ['чечевиц', 'чечевица'], ['курин|куриц|цыпл', 'курица'], ['индейк', 'индейка'],
+  ['говяд|телят', 'говядина'], ['свин', 'свинина'], ['лосос|сёмг|семг|форел|горбуш', 'красная рыба'], ['треск|минтай|хек|навага|камбал', 'белая рыба'], ['скумбр|сельд', 'жирная рыба'],
+  ['тунец|тунц', 'тунец'], ['творог', 'творог'], ['яйц|яич', 'яйца'], ['тофу', 'тофу']].map(([rx, k]) => [new RegExp(rx, 'i'), k]);
+function basesOf(d) {
+  if (d._bs) return d._bs; const s = new Set();
+  d.ing.forEach(i => { if ((i.g || 0) < 30) return; const hit = BASES.find(([rx]) => rx.test(i.name || '')); if (hit) s.add(hit[1]); });
+  Object.defineProperty(d, '_bs', {value: s, enumerable: false, configurable: true, writable: true}); return s;
+}
+function varietyOk(d, day, slot, extra) { // extra — блюдо, которое вот-вот встанет в этот же день (текущая карточка)
+  if (!d || !S.plan || !S.plan.days[day]) return true; const b = basesOf(d); if (!b.size) return true;
+  const other = S.plan.days[day].slots.filter((sl, i) => sl && i !== slot).map(sl => sl.dish); if (extra) other.push(extra);
+  return !other.some(x => [...basesOf(x)].some(k => b.has(k)));
+}
 function myCuisine(d) { // «моя» кухня: вес теста ≥ среднего (меняет только тест вкусов); «не моих» нет (веса равны) — все не «мои»
   const lv = d.lvl != null && Array.isArray(S.taste.lvl), w = lv ? S.taste.lvl : S.taste.w, keys = lv ? [0, 1, 2] : [...new Set([...CUISINES, ...Object.keys(S.taste.w)])];
   const vals = keys.map(k => w[k] || 0), m = vals.reduce((a, b) => a + b, 0) / vals.length;
@@ -433,18 +452,22 @@ function pickNewLocal(ctx, relaxed) {
   const pool = [...Object.values(DBMAP), ...Object.values(S.dishStore).filter(d => d.src === 'server')].filter(d => !inLib.has(d.id) && !(S.cool[d.id] > now) && (relaxed || !seenEver.has(d.id)) && !(S.collect.otherCuisines && !relaxed && myCuisine(d)) && fitsSlot(d, ctx, relaxed));
   noTaste = !!(S.collect.otherCuisines && !relaxed); try { return rank(pool, ctx)[0] || null; } finally { noTaste = false; }
 }
-async function pickNew(ctx) {
-  if (Server.on()) { const d = await serverNew(ctx); if (d) return d; }
+async function pickNew(ctx) { // запас с сервера — мгновенно; пуст — один запрос к серверу
+  if (Server.on()) { const d = poolPick(ctx) || await serverNew(ctx); if (d) return d; }
   return pickNewLocal(ctx) || pickNewLocal(ctx, true) || pickNewLocal(ctx, 'section') || pickNewLocal(ctx, 'repeat');
 }
+const feedCtx = (day, slot) => { const F = S.feed, key = day + '-' + slot; return {day, slot, type: pattern()[slot][0], tg: slotTarget(day, slot), seen: new Set(F.seen[key] || [])}; };
 async function nextCard() {
-  const F = S.feed, key = F.day + '-' + F.slot, t0 = performance.now();
+  const F = S.feed, key = F.day + '-' + F.slot;
   F.seen[key] = F.seen[key] || [];
-  const ctx = {day: F.day, slot: F.slot, type: pattern()[F.slot][0], tg: slotTarget(F.day, F.slot), seen: new Set(F.seen[key])};
+  const ctx = feedCtx(F.day, F.slot);
   F.counter = (F.counter || 0) + 1;
   let dish = null, src = 'new';
   const hq = (F.homeQueue || []).findIndex(x => x.types.includes(ctx.type) && F.day <= 1 && !ctx.seen.has(x.id));
+  const pk = F.peek && F.peek.day === F.day && F.peek.slot === F.slot ? poolTake(F.peek.id, ctx) : null; // карточка, которая уже лежала под текущей
+  F.peek = null;
   if (hq >= 0) { dish = F.homeQueue.splice(hq, 1)[0]; src = 'home'; }
+  else if (pk) { dish = pk; src = 'new'; }
   else if (F.counter % 5 === 0) { dish = await pickNew(ctx); src = 'new'; }
   else {
     const full = libMerged(ctx.type, 'main').length >= capacity(ctx.type);
@@ -455,16 +478,24 @@ async function nextCard() {
   }
   if (!dish) { dish = rank([...Object.values(DBMAP), ...Object.values(S.dishStore).filter(d => d.src === 'server')].filter(d => fitsSlot(d, ctx, 'repeat')), ctx)[0] || null; src = 'main'; } // И2: повтор блюда (в т. ч. из кругов) лучше пустого приёма
   if (!dish && Server.on()) { dish = await serverLast(ctx); src = 'new'; } // пустой приём недопустим: последний шанс — сервер
-  await uniformDelay(t0);
   F.card = dish ? {dish, src} : null;
-  if (dish) { F.seen[key].push(dish.id); rememberDish(dish); }
+  if (dish) { F.seen[key].push(dish.id); rememberDish(dish); peekNext(dish); }
   save();
 }
-
-/* ---------- Одинаковая скорость карточек ---------- */
+function nextEmptyAfter(day, slot) { // приём, на который перейдёт подбор после «Взять»
+  for (let k = 0; k < S.plan.len; k++) { const d = (day + k) % S.plan.len; for (let i = 0; i < S.plan.meals; i++) if (!S.plan.days[d].slots[i] && !(d === day && i === slot)) return [d, i]; }
+  return null;
+}
+function peekNext(cur) { // следующая карточка заранее лежит под текущей (из запаса, без запроса)
+  const F = S.feed, nx = nextEmptyAfter(F.day, F.slot); if (!nx || !Server.on()) return;
+  const ctx = feedCtx(nx[0], nx[1]); ctx.seen.add(cur.id); if (nx[0] === F.day) ctx.extra = cur;
+  const d = poolPick(ctx, true); if (d) F.peek = {day: nx[0], slot: nx[1], id: d.id};
+}
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-function cardDelay() { const a = (S.aiTimes || []).slice(-20).sort((x, y) => x - y); const m = a.length ? a[a.length >> 1] : 1500; return Math.min(5000, Math.max(700, m)); }
-async function uniformDelay(t0) { const w = cardDelay() + (Math.random() - 0.5) * 500 - (performance.now() - t0); if (w > 0) await sleep(w); }
+async function withLoading(fn) { // скелет — только если карточка не нашлась мгновенно
+  const F = S.feed, t = setTimeout(() => { F.loading = true; render(); }, 150);
+  try { await fn(); } finally { clearTimeout(t); F.loading = false; render(); }
+}
 
 /* ---------- Сервер /v1 (API.md, с правками §9) ---------- */
 const DEV_KEY = 'moy-racion-device';
@@ -498,15 +529,17 @@ const Server = {
     const keyed = opts.keyed !== false, t0 = performance.now();
     if (keyed && path !== '/v1/feedback') await flushFeedback();
     const req = keyed ? Object.assign({key: S.settings.accessKey, device: deviceId()}, body || {}) : body;
-    let res, j;
+    let res, j; const ac = new AbortController(), tm = setTimeout(() => ac.abort(), opts.timeout || 30000); // зависшее соединение не держит карточку (нейросеть на сервере — до 25 с)
     try {
-      res = await fetch(this.base() + path, opts.get ? {method: 'GET'} : {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(req)});
+      res = await fetch(this.base() + path, opts.get ? {method: 'GET', signal: ac.signal} : {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(req), signal: ac.signal});
       j = await res.json().catch(() => ({ok: false, error: 'server_error'}));
     } catch (e) { logApi(path, req, {ok: false, error: 'net', message: e.message}, t0); throw new ApiError('net'); }
+    finally { clearTimeout(tm); }
     logApi(path, req, j, t0, res.status);
     if (j && j.ok) return j;
     const code = (j && j.error) || 'server_error';
     if (code === 'rate_limited' && !opts.retried) { await sleep(Math.min(10, +j.retry_after || 2) * 1000); return this.call(path, body, Object.assign({}, opts, {retried: true})); }
+    if (code === 'server_error' && res.status >= 500 && !opts.retried) return this.call(path, body, Object.assign({}, opts, {retried: true})); // разовый сбой сети между Cloudflare и сервером
     if (KEY_ERRORS.includes(code)) S.access = Object.assign({}, S.access || {}, {error: code, until: j.until || (S.access && S.access.until), checkedAt: Date.now()});
     throw new ApiError(code, (code in API_MSG && !['bad_request', 'not_found', 'server_error'].includes(code)) ? API_MSG[code] : (j && j.message) || API_MSG[code], j);
   }
@@ -571,13 +604,11 @@ async function fetchDishes(ctx, extra) {
   if (j.short && S.feed && !S.feed.shortWarned) { S.feed.shortWarned = true; if (j.short === 'ai_limit') toast(API_MSG.ai_limit); }
   return list;
 }
-async function serverNew(ctx) { // каждая 5-я карточка: новое блюдо с сервера; берём по 3 за запрос
-  const qk = ctx.type + '|' + secs().join('') + (S.collect.otherCuisines ? '|o' : ''), Q = S.srvQueue[qk] = (S.srvQueue[qk] || []).filter(id => getDish(id));
-  const fromQ = () => { while (Q.length) { const d = getDish(Q.shift()); if (fitsSlot(d, ctx, true)) return d; } return null; };
-  let d = fromQ(); if (d) return d;
-  try { (await fetchDishes(ctx, {count: 3})).forEach(x => Q.push(x.id)); d = fromQ(); }
+async function serverNew(ctx) { // запас этого приёма пуст: один запрос к серверу (под нормы дня), лишние блюда — в запас
+  try { const P = poolState(), list = await fetchDishes(ctx, {count: 3}), q = P.q[ctx.type] = P.q[ctx.type] || [];
+    list.forEach(d => { if (!q.includes(d.id)) q.push(d.id); }); }
   catch (e) { noteServerError(e); }
-  return d;
+  poolFill(); return poolPick(ctx);
 }
 async function serverLast(ctx) { // в кругах и базе пусто: одно блюдо прямо с сервера (он закрывает приём нейросетью)
   try { const l = await fetchDishes(ctx, {count: 1}); return l.find(d => allowedByDiet(d) && !isBanned(d) && !ctx.seen.has(d.id)) || null; }
@@ -586,6 +617,72 @@ async function serverLast(ctx) { // в кругах и базе пусто: од
 function noteServerError(e) {
   const F = S.feed; if (F && F.errWarned === e.code) return; if (F) F.errWarned = e.code;
   toast(String(e.message || '').replace(/[.!]?\s*$/, '.') + (KEY_ERRORS.includes(e.code) ? '' : ' Беру блюда из ваших кругов.'));
+}
+
+/* ---------- Запас блюд с сервера: карточки берутся мгновенно, докачка идёт в фоне ----------
+   На каждое место в рационе недели — около 5 вариантов (4 приёма × 7 дней ≈ 140 блюд).
+   Смена вкусов, аллергий, типа питания, разделов, бюджета или людей — запас очищается и качается заново. */
+const POOL_PER = 5, POOL_BATCH = 5;
+function poolTarget(type) { return Math.min(70, pattern().filter(m => m[0] === type).length * 7 * POOL_PER); }
+function poolSig() {
+  const st = S.settings, t = S.taste;
+  return JSON.stringify([st.serverUrl, st.accessKey, st.diet, [...(st.allergens || [])].sort(), [...(st.forbidden || [])].map(s => String(s).toLowerCase().trim()).sort(), secs(), !!S.collect.otherCuisines,
+    t.lvl || t.w, pattern().length, Math.round((+S.collect.budget || 0) / 500), S.people.map(p => [p.sex, p.age, p.height, p.weight, effGoal(p), p.work, p.trN, p.trMin, p.sport])]);
+}
+function poolState() {
+  const sig = poolSig();
+  if (!S.pool || S.pool.sig !== sig) { S.pool = {sig, q: {}, done: {}}; pruneStore(); }
+  return S.pool;
+}
+function pruneStore() { // кэш блюд не растёт бесконечно: остаётся всё, на что есть ссылки
+  const keep = new Set([...Object.values(S.lib).flatMap(sys => Object.values(sys).flatMap(L => [...L.main, ...L.sec])), ...S.banned.ids, ...(S.imports || []).flatMap(x => x.ids || []),
+    ...Object.values((S.pool || {}).q || {}).flat(), ...Object.values((S.feed || {}).seen || {}).flat()]);
+  Object.keys(S.dishStore).forEach(id => { if (!keep.has(id)) delete S.dishStore[id]; });
+}
+function poolReq(type) { // блюда «вообще» для приёма: нормы главного едока без учёта съеденного, бюджет на всю неделю
+  const st = S.settings, pat = pattern(), P = poolState(), left = {}, days = S.plan ? S.plan.len : S.settings.planLen || 7;
+  pat.forEach(m => left[m[0]] = (left[m[0]] || 0) + days);
+  const ex = new Set([...(P.q[type] || []), ...allSlots().map(sl => sl.dish.id), ...S.banned.ids]);
+  return {meal: type, sections: secs(), count: POOL_BATCH, eater: eaterReq(-1, -1), deficits: [], meal_share: pat.find(m => m[0] === type)[2] / 100,
+    budget_left: Math.max(0, r0(baseBudget())), meals_left: left, meals_per_day: pat.length, allergies: st.allergens || [], diet: DIET_API[st.diet] || 'all',
+    forbid: st.forbidden, exclude: [...ex].filter(id => !DBMAP[id]).slice(-300), other_cuisines: !!S.collect.otherCuisines};
+}
+let poolBusy = false;
+async function poolFill() {
+  if (poolBusy || !Server.on() || !S.settings.accessKey || !S.people.length || !S.onboarded) return;
+  poolBusy = true;
+  try {
+    for (let n = 0; n < 60; n++) {
+      const P = poolState(), types = [...new Set(pattern().map(m => m[0]))].filter(t => !P.done[t] && (P.q[t] || []).length < poolTarget(t));
+      if (!types.length) break;
+      const type = types.sort((a, b) => (P.q[a] || []).length / poolTarget(a) - (P.q[b] || []).length / poolTarget(b))[0];
+      let j;
+      try { j = await Server.call('/v1/dish', poolReq(type), {timeout: 10000}); }
+      catch (e) { if (e.code === 'exhausted' || e.code === 'ai_invalid') { P.done[type] = true; continue; }
+        if (!KEY_ERRORS.includes(e.code)) { poolFill.fails = (poolFill.fails || 0) + 1; setTimeout(poolFill, Math.min(60000, 5000 * poolFill.fails)); } break; }
+      poolFill.fails = 0;
+      if (S.pool !== P) continue;                                                // настройки сменились во время запроса — ответ устарел
+      const q = P.q[type] = P.q[type] || [], before = q.length;
+      (j.dishes || []).map(fromApi).filter(d => d.types.includes(type) && allowedByDiet(d) && !isBanned(d)).forEach(d => { rememberDish(d); if (!q.includes(d.id)) q.push(d.id); });
+      // в базе этого приёма новые блюда кончились (повтор или очередь дошла до нейросети) — дальше не качаем, нейросеть не тратим
+      if (q.length === before || j.short === 'exhausted' || (j.source || []).includes('ai')) P.done[type] = true;
+      save();
+    }
+  } finally { poolBusy = false; }
+}
+function schedulePool() { clearTimeout(schedulePool.t); schedulePool.t = setTimeout(() => { if (S.pool && S.pool.sig === poolSig() && !Object.keys(S.pool.q).some(t => (S.pool.q[t] || []).length < poolTarget(t) / 2 && !S.pool.done[t])) return; poolFill(); }, 1200); }
+function poolPick(ctx, peek) { // первое подходящее блюдо запаса: сначала без повтора основы дня
+  const P = poolState(), q = (P.q[ctx.type] || []).filter(id => getDish(id));
+  for (const strict of [true, false]) for (const id of q) {
+    const d = getDish(id); if (!fitsSlot(d, ctx, true) || (strict && !varietyOk(d, ctx.day, ctx.slot, ctx.extra))) continue;
+    if (!peek) { P.q[ctx.type] = q.filter(x => x !== id); if (P.q[ctx.type].length < poolTarget(ctx.type) / 2) { P.done[ctx.type] = false; schedulePool(); } }
+    return d;
+  }
+  return null;
+}
+function poolTake(id, ctx) { // заранее выбранная карточка — только если всё ещё подходит дню
+  const P = poolState(), d = getDish(id); if (!d || !(P.q[ctx.type] || []).includes(id) || !fitsSlot(d, ctx, true) || !varietyOk(d, ctx.day, ctx.slot)) return null;
+  P.q[ctx.type] = P.q[ctx.type].filter(x => x !== id); schedulePool(); return d;
 }
 async function refreshPrices() { // раз в неделю: актуальные cost для блюд кругов
   if (!Server.on() || !S.settings.accessKey || Date.now() - (S.pricesAt || 0) < 7 * 864e5) return;
@@ -884,7 +981,7 @@ function viewCollect() {
     a.sort(); save(); render(); });
   $('#c-budget').onchange = e => { c.budget = +e.target.value || 0; save(); render(); };
   $('#c-cook2').onclick = () => { c.cook2 = !c.cook2; save(); render(); };
-  $('#c-other').onclick = () => { c.otherCuisines = !c.otherCuisines; S.srvQueue = {}; save(); render(); };
+  $('#c-other').onclick = () => { c.otherCuisines = !c.otherCuisines; save(); render(); };
   const wish = () => addDesired($('#c-wish').value.trim(), $('#c-wish-slot').value);
   $('#c-wish-add').onclick = wish; $('#c-wish').onkeydown = e => { if (e.key === 'Enter') wish(); };
   $('#c-go').onclick = startCollect;
@@ -943,15 +1040,15 @@ function firstEmpty(fromDay = 0) {
 }
 const CARD_LIMIT = 15;
 async function startFeed(day, slot, manual) {
-  S.feed = Object.assign({v4: true, seen: {}, used: {}, counter: 0, homeQueue: []}, S.feed && S.feed.v4 ? S.feed : {}, {active: true, day, slot, manual, card: null, loading: true, exhausted: false, aiWarned: false});
-  render();
+  S.feed = Object.assign({v4: true, seen: {}, used: {}, counter: 0, homeQueue: []}, S.feed && S.feed.v4 ? S.feed : {}, {active: true, day, slot, manual, card: null, peek: null, loading: false, exhausted: false, aiWarned: false});
+  poolFill();
   if (S.collect.homeOn && S.collect.home.length && Server.on() && S.plan.homeFor !== S.collect.home.join('|')) {
-    S.plan.homeFor = S.collect.home.join('|');
+    S.plan.homeFor = S.collect.home.join('|'); S.feed.loading = true; render();
     for (const si of pattern().map((m, i) => i).filter(i => 'ld'.includes(pattern()[i][0])).slice(0, 2)) {
       try { const ctx = {day: 0, slot: si, type: pattern()[si][0], tg: slotTarget(0, si), seen: S.feed.homeQueue.map(x => x.id)}; (await fetchDishes(ctx, {home: S.collect.home, count: 1})).forEach(d => { if (allowedByDiet(d)) S.feed.homeQueue.push(d); }); } catch (e) { noteServerError(e); break; }
     }
   }
-  await nextCard(); S.feed.loading = false; render();
+  await withLoading(nextCard);
 }
 
 /* ---------- Лента карточек (как в знакомствах) ---------- */
@@ -961,9 +1058,12 @@ const FIC = {
   mark: '<path d="M5 19l1-4.2L15.6 5.2a2 2 0 0 1 2.8 0l.4.4a2 2 0 0 1 0 2.8L9.2 18 5 19z" fill="currentColor" fill-opacity=".14"/><path d="M14 7l3 3"/>'
 };
 const fic = n => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${FIC[n]}</svg>`;
-function cardHtml(d, m, slot) {
+function cardHtml(d, m, slot, under) { // under — следующая карточка, лежит под текущей (без кнопок и жестов)
   const ff = famFactor(d, slot), n = nut(d, ff), sec = SECTIONS[sectionOf(d)][0];
   const ing = d.ing.map(x => `<li><span>${esc(x.name)}</span><i></i><b>${fmtAmt(x, x.g * ff)}</b></li>`).join('');
+  if (under) return `<article class="dcard under" aria-hidden="true"><div class="dc-hero"><div class="plate"><i></i><b>${esc((d.name.trim()[0] || '·').toUpperCase())}</b></div>
+    <div class="dc-head"><div class="dc-tags"><span>${m[1]}</span><span>${sec}</span></div><h3 class="cname">${esc(d.name)}</h3></div></div>
+   <div class="dc-body"><div class="grid4 kb"><div><b>${r0(n.kcal)}</b><span>ккал</span></div><div><b>${r0(n.p)}</b><span>белки, г</span></div><div><b>${r0(n.f)}</b><span>жиры, г</span></div><div><b>${r0(n.c)}</b><span>углев., г</span></div></div></div></article>`;
   return `<article class="dcard" id="card" tabindex="0" aria-label="${esc(d.name)}">
    <span class="stamp st-take">Взять</span><span class="stamp st-skip">Пропуск</span><span class="stamp st-mark">Пометка</span><span class="stamp st-close">Свернуть</span>
    <div class="dc-hero"><div class="plate"><i></i><b>${esc((d.name.trim()[0] || '·').toUpperCase())}</b></div>
@@ -985,10 +1085,11 @@ function viewFeed() {
   if (F.loading) card = `<article class="dcard skel"><div class="dc-hero"><div class="plate"><i></i></div><div class="dc-head"><div class="dc-tags"><span>${m[1]}</span></div><span class="sk w70"></span></div></div><div class="dc-body"><span class="sk w90"></span><span class="sk w40"></span><span class="sk w90"></span><span class="sk w70"></span><p class="hint">Подбираю блюдо под нормы дня…</p></div></article>`;
   else if (F.exhausted || !F.card) card = `<article class="dcard end"><div class="dc-body"><p class="eyebrow">${m[1]}</p><h3>${F.exhausted ? 'Карточки для этого приёма закончились' : 'Подходящих блюд больше нет'}</h3><p class="hint">Выберите из показанных или добавьте сложность и бюджет в разделе «Сбор».</p><div class="actions"><button class="btn primary" id="f-pick">Выбрать из показанных</button></div></div></article>`;
   else card = cardHtml(F.card.dish, m, F.slot);
+  const pd = !F.loading && F.card && F.peek ? getDish(F.peek.id) : null, under = pd ? cardHtml(pd, pat[F.peek.slot], F.peek.slot, true) : '<div class="ghostcard g1"></div>';
   return `<section class="feedwrap" id="feedwrap"><div class="feed">
    <header class="ftop"><button class="iconbtn" id="f-close" aria-label="Свернуть подбор">${ic('down')}</button><div class="fday"><button class="arrow" id="f-prev" aria-label="Предыдущий день">‹</button><span>${DOW[dt.getDay()]}, ${dt.getDate()} ${MON[dt.getMonth()]}</span><button class="arrow" id="f-next" aria-label="Следующий день">›</button></div><span class="fcount">${done}<small>/${total}</small></span></header>
    <div class="slots">${pat.map((x, i) => `<button class="slot${i === F.slot ? ' on' : ''}${taken[i] ? ' done' : ''}" data-slot="${i}">${x[1]}</button>`).join('')}</div>
-   <div class="deck" id="deck"><div class="ghostcard g2"></div><div class="ghostcard g1"></div>${card}</div>
+   <div class="deck" id="deck"><div class="ghostcard g2"></div>${under}${card}</div>
    <div class="fbtns">
     <button class="fb fb-skip" id="f-skip" aria-label="Пропустить">${fic('skip')}<span>Пропуск</span></button>
     <button class="fb fb-dis" id="f-dis" aria-label="Не нравится">${fic('dis')}<span>Не нравится</span></button>
@@ -1062,7 +1163,7 @@ document.addEventListener('keydown', e => {
   if (k) { e.preventDefault(); fling(k); } else if (e.key === 'ArrowUp') { e.preventDefault(); markSheet(); }
 });
 function goDay(delta) { const F = S.feed; const d = (F.day + delta + S.plan.len) % S.plan.len; const slot = S.plan.days[d].slots.findIndex(s => !s); goSlot(d, slot < 0 ? 0 : slot); }
-async function goSlot(day, slot) { const F = S.feed; F.day = day; F.slot = slot; F.card = null; F.exhausted = (F.used[day + '-' + slot] || 0) >= CARD_LIMIT; F.loading = !F.exhausted; render(); if (!F.exhausted) { await nextCard(); F.loading = false; } render(); }
+async function goSlot(day, slot) { const F = S.feed; F.day = day; F.slot = slot; F.card = null; F.exhausted = (F.used[day + '-' + slot] || 0) >= CARD_LIMIT; if (F.exhausted) return render(); await withLoading(nextCard); }
 function place(dish) {
   const F = S.feed, pat = pattern();
   const r = safePlace(F.day, F.slot, dish, {manual: F.manual});
@@ -1074,7 +1175,7 @@ function place(dish) {
 }
 async function takeCard() {
   const F = S.feed; if (!F.card) return;
-  if (place(F.card.dish) === false) { F.loading = true; F.card = null; save(); render(); await nextCard(); F.loading = false; render(); return; }
+  if (place(F.card.dish) === false) { F.card = null; save(); await withLoading(nextCard); return; }
   const next = firstEmpty(F.day);
   if (!next) { F.active = false; S.ui.tab = 'plan'; save(); render(); toast('Рацион собран. Список покупок готов.'); return; }
   F.manual = false; save(); await goSlot(next[0], next[1]);
@@ -1086,7 +1187,7 @@ async function refuseCard(hard) {
   else { feedback(d, 'skip'); const r = libRefuse(d, type); if (r === 'ban') toast('Второй отказ — блюдо удалено из ваших'); }
   F.used[key] = (F.used[key] || 0) + 1;
   if (F.used[key] >= CARD_LIMIT) { F.exhausted = true; F.card = null; save(); render(); return; }
-  F.loading = true; F.card = null; save(); render(); await nextCard(); F.loading = false; render();
+  F.card = null; F.peek = null; save(); await withLoading(nextCard);
 }
 function pickSeen() {
   const F = S.feed, list = (F.seen[F.day + '-' + F.slot] || []).map(getDish).filter(d => d && !isBanned(d) && allowedByDiet(d) && safeFit(d, F.day, F.slot).ok);
@@ -1215,7 +1316,7 @@ function viewSettings() {
     v.innerHTML = `${appbar('Настройки', 'Профиль и приложение', {back: true})}
     <button class="profile" data-person="${me.id}"><span class="mono">${esc(me.name.slice(0, 1).toUpperCase())}</span><span><b>${esc(me.name)}</b><small>${r0(t.E)} ккал · белок ${r0(t.P)} г в день</small></span>${ic('chev', 'sm')}</button>
     <nav class="rows">${SET_PAGES.map(([k, t, s]) => `<button class="row" data-set="${k}"><span class="medal">${ic(SET_IC[k])}</span><span><b>${t}</b><small>${s}</small></span>${ic('chev', 'sm')}</button>`).join('')}</nav>
-    <p class="hint center">Мой рацион · версия 0.9.0</p>`;
+    <p class="hint center">Мой рацион · версия 0.9.1</p>`;
     v.querySelectorAll('[data-set]').forEach(b => b.onclick = () => { S.ui.set = b.dataset.set; save(); render(); });
     v.querySelector('[data-person]').onclick = () => editPerson(me);
     return;
@@ -1247,7 +1348,7 @@ function viewSettings() {
     <h4>Состояние</h4><div class="panel"><div class="field col"><em>Сервер</em><code class="mono-t">${st.serverUrl ? esc(st.serverUrl) : 'не задан — сбор из кругов и встроенных демо-блюд'}</code></div>
     <div class="field col"><em>Устройство</em><code class="mono-t">${esc(deviceId())}</code></div>
     <div class="field col"><em>Отзывы в очереди</em><code class="mono-t">${S.fbq.length}</code></div>
-    <div class="field col"><em>Задержка карточки</em><code class="mono-t">${cardDelay()} мс · одинаковая для всех карточек</code></div>
+    <div class="field col"><em>Запас блюд</em><code class="mono-t">${S.pool ? Object.entries(S.pool.q).map(([t, q]) => `${t}: ${q.length}/${poolTarget(t)}${S.pool.done[t] ? ' (база кончилась)' : ''}`).join(' · ') || 'пусто' : 'пусто'}</code></div>
     <div class="field col"><em>Кэш блюд</em><code class="mono-t">встроенных ${Object.keys(DBMAP).length} · с сервера ${Object.values(S.dishStore).filter(d => d.src === 'server').length} · цены обновлены ${S.pricesAt ? new Date(S.pricesAt).toLocaleDateString('ru-RU') : 'ещё нет'}</code></div>
     <div class="field col"><em>Бюджет</em><code class="mono-t">K = ${r1(famK())} · на базового человека ${r0(baseBudget())} ₽ · остаток ${r0(budgetLeft())} ₽</code></div></div>
     ${L ? `<h4>Запрос · ${esc(L.path)} · ${new Date(L.at).toLocaleTimeString('ru-RU')} · ${L.status || 'нет связи'} · ${L.ms} мс</h4><pre class="code">${esc(JSON.stringify(L.req, null, 2))}</pre><h4>Ответ</h4><pre class="code">${esc(JSON.stringify(L.res, null, 2))}</pre>
@@ -1429,6 +1530,7 @@ if (S.feed && S.feed.active) { S.feed.loading = false; if (!S.feed.card && !S.fe
 auditPlanSafety(); save();
 render();
 setTimeout(() => { refreshPrices(); flushFeedback(); sendPendingTastes(); }, 3000);
+poolFill(); window.addEventListener('online', () => poolFill()); // запас блюд докачивается сразу при открытии и при появлении сети
 if ('serviceWorker' in navigator && location.protocol === 'https:' && !location.hostname.endsWith('claude.ai') && !location.hostname.includes('claudeusercontent')) { // новая версия сайта: сервис-воркер обновляется при каждом открытии, страница один раз перезагружается на свежие файлы
   const had = !!navigator.serviceWorker.controller; let reloaded = false;
   navigator.serviceWorker.addEventListener('controllerchange', () => { if (had && !reloaded) { reloaded = true; location.reload(); } });
