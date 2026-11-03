@@ -515,9 +515,9 @@ const API_MSG = {
   blocked: 'Ключ заблокирован. Напишите в Telegram-бот.',
   exhausted: 'Подходящие блюда закончились — добавьте другое время готовки или смягчите запреты.',
   ai_invalid: 'Не удалось составить блюдо. Попробуйте сформулировать иначе.',
-  ai_limit: 'Лимит нейросети на сегодня исчерпан. Новые блюда — из базы, завтра лимит обновится.',
+  ai_limit: 'Новые блюда пока из базы — загляните позже.',
   rate_limited: 'Слишком много запросов. Подождите немного.',
-  ai_unavailable: 'Нейросеть сейчас недоступна, попробуйте позже.',
+  ai_unavailable: 'Сервер сейчас недоступен, попробуйте позже.',
   server_error: 'Ошибка сервера. Попробуйте позже.',
   bad_request: 'Ошибка приложения: сервер не понял запрос.',
   not_found: 'Ошибка приложения: неизвестный запрос.',
@@ -1036,7 +1036,7 @@ function viewCollect() {
    <div class="field col"><em>Желаемое блюдо</em>
      <div class="wishrow"><input id="c-wish" placeholder="Борщ, плов…" enterkeyhint="done" aria-label="Название блюда"><select id="c-wish-slot" aria-label="Приём пищи">${[...new Set(pat.map(m => m[0]))].map(t => `<option value="${t}">${pat.find(m => m[0] === t)[1].replace(/ \d$/, '')}</option>`).join('')}</select><button class="addbtn" id="c-wish-add" aria-label="Поставить в рацион">${ic('plus')}</button></div>
      ${wishes.length ? `<div class="chips">${wishes.map(s => `<span class="chip">${esc(s.dish.name)}</span>`).join('')}</div>` : ''}
-     <small>Встанет на ближайший свободный день. Если блюда нет в базе, его составит нейросеть.</small></div>
+     <small>Встанет на ближайший свободный день. Если такого блюда в базе пока нет, предложим похожее по названию.</small></div>
    <div class="field switch">${ic('shop')}<span><em>Есть продукты дома</em><small>Блюда из них — в ближайшие дни, в покупках их не будет</small></span><button class="tog${c.homeOn ? ' on' : ''}" id="c-home-tog" role="switch" aria-checked="${c.homeOn}" aria-label="Есть продукты дома"><i></i></button></div>
    ${c.homeOn ? `<div class="field col"><div class="chipin"><input id="c-home" placeholder="Например, гречка" enterkeyhint="done"><button class="btn ghost sm" id="c-home-add">Добавить</button></div>${chipsList(c.home, 'rmhome')}</div>` : ''}
    <div class="field switch">${ic('dish')}<span><em>Готовить на 2 дня</em><small>Обед и ужин — одной готовкой</small></span><button class="tog${c.cook2 ? ' on' : ''}" id="c-cook2" role="switch" aria-checked="${c.cook2}" aria-label="Готовить на 2 дня"><i></i></button></div>
@@ -1388,7 +1388,7 @@ function viewSettings() {
     v.innerHTML = `${appbar('Настройки', 'Профиль и приложение', {back: true})}
     <button class="profile" data-person="${me.id}"><span class="mono">${esc(me.name.slice(0, 1).toUpperCase())}</span><span><b>${esc(me.name)}</b><small>${r0(t.E)} ккал · белок ${r0(t.P)} г в день</small></span>${ic('chev', 'sm')}</button>
     <nav class="rows">${SET_PAGES.map(([k, t, s]) => `<button class="row" data-set="${k}"><span class="medal">${ic(SET_IC[k])}</span><span><b>${t}</b><small>${s}</small></span>${ic('chev', 'sm')}</button>`).join('')}</nav>
-    <p class="hint center">Мой рацион · версия 0.9.3</p>`;
+    <p class="hint center">Мой рацион · версия 0.9.4</p>`;
     v.querySelectorAll('[data-set]').forEach(b => b.onclick = () => { S.ui.set = b.dataset.set; save(); render(); });
     v.querySelector('[data-person]').onclick = () => editPerson(me);
     return;
@@ -1416,7 +1416,7 @@ function viewSettings() {
   if (pg === 'history') body = S.lastWeek ? historyHtml() : '<div class="empty"><h3>Истории пока нет</h3><p>Прошедшие дни рациона появятся здесь — за последние 7 дней.</p></div>';
   if (pg === 'system') {
     const L = S.apiLog;
-    body = `<div class="alert">${ic('code')}<div><b>Только для разработчика</b><p>Подбор новых блюд, нейросеть и цены — на сервере. Здесь видно последний запрос к серверу и его ответ. Ключ скрыт.</p></div></div>
+    body = `<div class="alert">${ic('code')}<div><b>Только для разработчика</b><p>Подбор блюд и цены — на сервере. Здесь видно последний запрос к серверу и его ответ. Ключ скрыт.</p></div></div>
     <h4>Состояние</h4><div class="panel"><div class="field col"><em>Сервер</em><code class="mono-t">${st.serverUrl ? esc(st.serverUrl) : 'не задан — сбор из кругов и встроенных демо-блюд'}</code></div>
     <div class="field col"><em>Устройство</em><code class="mono-t">${esc(deviceId())}</code></div>
     <div class="field col"><em>Отзывы в очереди</em><code class="mono-t">${S.fbq.length}</code></div>
@@ -1455,7 +1455,7 @@ function keyPageHtml() {
   if (!Server.on()) card = `<div class="keycard"><p class="eyebrow">Сервер не подключён</p><h3>Работает без подписки</h3><p class="hint">Рацион, круги и продукты доступны. Новые блюда появятся, когда будет подключён сервер.</p></div>`;
   else if (!A) card = `<div class="keycard"><p class="eyebrow">Ключ ещё не проверен</p><h3>${st.accessKey ? 'Нажмите «Проверить»' : 'Введите ключ'}</h3><p class="hint">Ключ выдаёт Telegram-бот: команда /start — пробный доступ на 7 дней.</p></div>`;
   else if (A.error) card = `<div class="keycard bad"><p class="eyebrow">Доступ не активен</p><h3>${{no_key: 'Нет ключа', key_not_found: 'Ключ не найден', expired: 'Подписка закончилась', device_mismatch: 'Ключ на другом устройстве', blocked: 'Ключ заблокирован'}[A.error] || 'Ошибка'}</h3><p class="hint">${esc(API_MSG[A.error] || '')}</p></div>`;
-  else card = `<div class="keycard ok"><p class="eyebrow">${A.plan === 'trial' ? 'Пробный доступ' : 'Подписка'}</p><h3 class="gt">до ${fmtD(A.until)}</h3><p class="hint">Осталось ${A.days_left} ${ruDays(+A.days_left || 0)}${A.ai_left != null ? ` · новых блюд от нейросети сегодня: ${A.ai_left}` : ''}</p></div>`;
+  else card = `<div class="keycard ok"><p class="eyebrow">${A.plan === 'trial' ? 'Пробный доступ' : 'Подписка'}</p><h3 class="gt">до ${fmtD(A.until)}</h3><p class="hint">Осталось ${A.days_left} ${ruDays(+A.days_left || 0)}</p></div>`;
   return `${card}
     <div class="panel"><label class="field"><span><em>Ключ доступа</em><input id="st-acc" type="password" autocomplete="off" value="${esc(st.accessKey)}" placeholder="MR-XXXXXXXX"></span></label><button class="btn primary wide" id="st-acc-check">Проверить ключ</button></div>
     <p class="hint">Ключ привязывается к этому устройству. Сменили телефон или очистили данные браузера — отвяжите старое устройство в боте командой /device.</p>
