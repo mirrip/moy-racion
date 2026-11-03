@@ -813,16 +813,14 @@ function onbStyle() {
 }
 function viewOnboard() {
   onbStyle();
-  let n = +S.ui.onb || 0; if (n > 3 && !S.people.length) n = 3; if (n < 0 || n > 6) n = 0; S.ui.onb = n;
+  let n = +S.ui.onb || 0; if (n > 2 && !S.people.length) n = 2; if (n < 0 || n > 6) n = 0; S.ui.onb = n;
   const top = k => `<div class="onb-top"><p class="eyebrow">Шаг ${k} из 6</p><button class="btn ghost sm" id="onb-back">Назад</button></div>`;
   const next = (id, t = 'Далее') => `<button class="btn primary wide" id="${id}">${t}</button>`;
   if (n === 0) return `<section class="onb"><div class="crest">${ic('leaf')}</div><p class="eyebrow">Мой рацион</p><h1 class="gt">Рацион на неделю под вашу семью</h1>
-  <p class="lead">Ответьте на несколько вопросов — соберём меню под ваши вкусы, нормы и бюджет.</p>${next('onb-start', 'Начать')}</section>`;
-  if (n === 1) return `<section class="onb">${top(1)}<h1 class="gt">Тест вкусов</h1><p class="lead">24 блюда: свайп вправо — нравится, влево — нет. Займёт минуту.</p>
-  ${next('onb-tt', 'Пройти тест')}<button class="btn ghost wide" id="onb-ttskip">Пропустить</button></section>`;
-  if (n === 2) {
+  <p class="lead">Ответьте на несколько вопросов — соберём меню под ваши вкусы, нормы и бюджет.</p>${next('onb-start', 'Зарегистрировать аккаунт')}</section>`;
+  if (n === 1) {
     const st = S.settings, low = st.forbidden.map(w => String(w).toLowerCase()), custom = st.forbidden.filter(w => !ONB_DISLIKE.some(d => d.toLowerCase() === String(w).toLowerCase()));
-    return `<section class="onb">${top(2)}<h1 class="gt">Что исключить?</h1>
+    return `<section class="onb">${top(1)}<h1 class="gt">Что исключить?</h1>
   <div class="onb-sec"><h4>Тип питания</h4><div class="chips">${DIET_LABELS.map(([k, t]) => `<button class="chip${st.diet === k ? ' on' : ''}" data-diet="${k}">${t}</button>`).join('')}</div></div>
   <div class="onb-sec"><h4>Аллергии</h4><div class="chips">${ALLERGENS.map(([k, t]) => `<button class="chip${st.allergens.includes(k) ? ' on' : ''}" data-all="${k}">${esc(t)}</button>`).join('')}</div></div>
   <div class="onb-sec"><h4>Не люблю</h4><div class="chips">${ONB_DISLIKE.map(w => `<button class="chip${low.includes(w.toLowerCase()) ? ' on' : ''}" data-dis="${esc(w)}">${w}</button>`).join('')}</div>
@@ -830,8 +828,10 @@ function viewOnboard() {
   ${custom.length ? `<div class="chips">${custom.map(w => `<button class="chip x" data-rmforb="${esc(w)}">${esc(w)}</button>`).join('')}</div>` : ''}</div>
   ${next('onb-next')}</section>`;
   }
-  if (n === 3) return `<section class="onb">${top(3)}<h1 class="gt">О вас</h1><p class="lead">По этим данным рассчитаем калории, белки, жиры и углеводы.</p>
+  if (n === 2) return `<section class="onb">${top(2)}<h1 class="gt">О вас</h1><p class="lead">По этим данным рассчитаем калории, белки, жиры и углеводы.</p>
   ${personForm(S.people[0] || {sex: 'm'})}${next('onb-next')}</section>`;
+  if (n === 3) return `<section class="onb">${top(3)}<h1 class="gt">Тест вкусов</h1><p class="lead">24 блюда: свайп вправо — нравится, влево — нет. Займёт минуту.</p>
+  ${next('onb-tt', 'Пройти тест')}<button class="btn ghost wide" id="onb-ttskip">Пропустить</button></section>`;
   if (n === 4) return `<section class="onb">${top(4)}<h1 class="gt">Образ жизни</h1>
   <p class="lead">По работе и тренировкам приложение рассчитает калории — в том числе для спортсменов.</p>${lifeHtml(S.people)}${next('onb-next')}</section>`;
   if (n === 6) return `<section class="onb">${top(6)}<h1 class="gt">Ключ доступа</h1><p class="lead">Последний шаг. Вставьте ключ — приложение подключится к базе блюд.</p>
@@ -858,9 +858,9 @@ function bindOnboard() {
     };
     if (btn) btn.onclick = run; if (inp) inp.onkeydown = e => { if (e.key === 'Enter') run(); };
   }
-  on('onb-tt', () => { tasteTest('self', () => go(2)); });
-  on('onb-ttskip', () => go(2));
-  if (n === 2) {
+  on('onb-tt', () => { tasteTest('self', () => go(4)); });
+  on('onb-ttskip', () => go(4));
+  if (n === 1) {
     const st = S.settings, view = $('#view');
     view.querySelectorAll('[data-diet]').forEach(b => b.onclick = () => { st.diet = b.dataset.diet; save(); keep(); });
     view.querySelectorAll('[data-all]').forEach(b => b.onclick = () => { const k = b.dataset.all; st.allergens = st.allergens.includes(k) ? st.allergens.filter(x => x !== k) : [...st.allergens, k]; save(); keep(); });
@@ -868,9 +868,9 @@ function bindOnboard() {
     view.querySelectorAll('[data-rmforb]').forEach(b => b.onclick = () => { st.forbidden = st.forbidden.filter(x => x !== b.dataset.rmforb); save(); keep(); });
     const add = () => { const i = $('#onb-forb'), w = i ? i.value.trim() : ''; if (!w) return; if (!st.forbidden.some(x => String(x).toLowerCase() === w.toLowerCase())) { st.forbidden = [...st.forbidden, w]; save(); } keep(); };
     on('onb-forb-add', add); const fi = $('#onb-forb'); if (fi) fi.onkeydown = e => { if (e.key === 'Enter') add(); };
-    on('onb-next', () => go(3));
+    on('onb-next', () => go(2));
   }
-  if (n === 3) on('onb-next', () => { const p = readPersonMerged(S.people[0] || null); if (!p) return; S.people[0] = p; go(4); });
+  if (n === 2) on('onb-next', () => { const p = readPersonMerged(S.people[0] || null); if (!p) return; S.people[0] = p; go(3); });
   if (n === 4) { bindLife($('#view'), keep); on('onb-next', () => go(5)); }
   if (n === 5) on('onb-next', () => go(6));
 }
@@ -1388,7 +1388,7 @@ function viewSettings() {
     v.innerHTML = `${appbar('Настройки', 'Профиль и приложение', {back: true})}
     <button class="profile" data-person="${me.id}"><span class="mono">${esc(me.name.slice(0, 1).toUpperCase())}</span><span><b>${esc(me.name)}</b><small>${r0(t.E)} ккал · белок ${r0(t.P)} г в день</small></span>${ic('chev', 'sm')}</button>
     <nav class="rows">${SET_PAGES.map(([k, t, s]) => `<button class="row" data-set="${k}"><span class="medal">${ic(SET_IC[k])}</span><span><b>${t}</b><small>${s}</small></span>${ic('chev', 'sm')}</button>`).join('')}</nav>
-    <p class="hint center">Мой рацион · версия 0.9.5</p>`;
+    <p class="hint center">Мой рацион · версия 0.9.6</p>`;
     v.querySelectorAll('[data-set]').forEach(b => b.onclick = () => { S.ui.set = b.dataset.set; save(); render(); });
     v.querySelector('[data-person]').onclick = () => editPerson(me);
     return;
