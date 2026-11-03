@@ -838,7 +838,7 @@ function viewOnboard() {
   }
   if (n === 2) return `<section class="onb">${top(2)}<h1 class="gt">О вас</h1><p class="lead">По этим данным рассчитаем калории, белки, жиры и углеводы.</p>
   ${personForm(S.people[0] || {sex: 'm'})}${next('onb-next')}</section>`;
-  if (n === 3) return `<section class="onb">${top(3)}<h1 class="gt">Тест вкусов</h1><p class="lead">Около 14 блюд: вправо — нравится, влево — нет, вниз — никогда. По ответам поймём, что вам предлагать. Займёт минуту.</p>
+  if (n === 3) return `<section class="onb">${top(3)}<h1 class="gt">Тест вкусов</h1><p class="lead">Около 24 блюд: вправо — нравится, влево — нет, вниз — никогда. По ответам поймём, что вам предлагать. Займёт минуту.</p>
   ${next('onb-tt', 'Пройти тест')}<button class="btn ghost wide" id="onb-ttskip">Пропустить</button></section>`;
   if (n === 4) return `<section class="onb">${top(4)}<h1 class="gt">Образ жизни</h1>
   <p class="lead">По работе и тренировкам приложение рассчитает калории — в том числе для спортсменов.</p>${lifeHtml(S.people)}${next('onb-next')}</section>`;
@@ -883,7 +883,7 @@ function bindOnboard() {
   if (n === 5) on('onb-next', () => go(6));
 }
 function offerTasteTest() { // после онбординга: тест вкусов, можно пропустить
-  sheet(`<p class="eyebrow">Тест вкусов</p><h3>Что вам по вкусу?</h3><p class="hint">1 минута: около 14 блюд — свайпните вправо то, что нравится. Пройти позже можно в настройках, «Мои вкусы».</p><div class="actions two"><button class="btn ghost" id="tt-skip">Пропустить</button><button class="btn primary" id="tt-go">Пройти</button></div>`, b => { $('#tt-skip', b).onclick = closeSheet; $('#tt-go', b).onclick = () => tasteTest('self'); });
+  sheet(`<p class="eyebrow">Тест вкусов</p><h3>Что вам по вкусу?</h3><p class="hint">1 минута: около 24 блюд — свайпните вправо то, что нравится. Пройти позже можно в настройках, «Мои вкусы».</p><div class="actions two"><button class="btn ghost" id="tt-skip">Пропустить</button><button class="btn primary" id="tt-go">Пройти</button></div>`, b => { $('#tt-skip', b).onclick = closeSheet; $('#tt-go', b).onclick = () => tasteTest('self'); });
 }
 
 /* ---------- Рацион ---------- */
@@ -1396,7 +1396,7 @@ function viewSettings() {
     v.innerHTML = `${appbar('Настройки', 'Профиль и приложение', {back: true})}
     <button class="profile" data-person="${me.id}"><span class="mono">${esc(me.name.slice(0, 1).toUpperCase())}</span><span><b>${esc(me.name)}</b><small>${r0(t.E)} ккал · белок ${r0(t.P)} г в день</small></span>${ic('chev', 'sm')}</button>
     <nav class="rows">${SET_PAGES.map(([k, t, s]) => `<button class="row" data-set="${k}"><span class="medal">${ic(SET_IC[k])}</span><span><b>${t}</b><small>${s}</small></span>${ic('chev', 'sm')}</button>`).join('')}</nav>
-    <p class="hint center">Мой рацион · версия 0.9.7</p>`;
+    <p class="hint center">Мой рацион · версия 0.9.8</p>`;
     v.querySelectorAll('[data-set]').forEach(b => b.onclick = () => { S.ui.set = b.dataset.set; save(); render(); });
     v.querySelector('[data-person]').onclick = () => editPerson(me);
     return;
@@ -1477,7 +1477,7 @@ function tastesHtml() {
   const wl = v => v > 0.1 ? 'like' : v < -0.1 ? 'dis' : '';
   const banned = S.banned.ids.map(getDish).filter(Boolean);
   const notes = Object.entries(S.marks.notes).map(([id, t]) => [getDish(id), t]).filter(x => x[0]);
-  return `<div class="alert">${ic('heart')}<div><b>${T.done ? 'Тест пройден' : 'Тест вкусов'}</b><p>${T.done ? 'Вкусы учитываются при подборе. Пройти заново можно в любой момент.' : '1 минута: около 14 блюд — нравится, не нравится или никогда. По ответам приложение поймёт, что вам предлагать.'}</p></div></div>
+  return `<div class="alert">${ic('heart')}<div><b>${T.done ? 'Тест пройден' : 'Тест вкусов'}</b><p>${T.done ? 'Вкусы учитываются при подборе. Пройти заново можно в любой момент.' : '1 минута: около 24 блюд — нравится, не нравится или никогда. По ответам приложение поймёт, что вам предлагать.'}</p></div></div>
   ${T.profile ? (sm => `<div class="panel"><div class="field col"><em>Любите</em>${sm.love.length ? `<div class="chips">${sm.love.map(t => `<span class="chip on">${esc(t)}</span>`).join('')}</div>` : '<span class="hint">пока не видно</span>'}</div><div class="field col"><em>Реже предлагать</em>${sm.avoid.length ? `<div class="chips">${sm.avoid.map(t => `<span class="chip">${esc(t)}</span>`).join('')}</div>` : '<span class="hint">ничего</span>'}</div></div>`)(ttSummary(T.profile)) : ''}
   ${(L => Array.isArray(L) ? `<div class="lvlbar">${LEVELS.map((n, k) => { const sum = L.reduce((a, b) => a + b, 0) || 1; return `<div><b>${r0(L[k] / sum * 100)}%</b><span>${n}</span></div>`; }).join('')}</div>` : '')(T.pendingLvl || T.lvl)}
   <div class="actions two"><button class="btn primary" data-test="self">Пройти самостоятельно</button><button class="btn ghost" data-test="family">Пройти с семьёй</button></div>
@@ -1504,10 +1504,10 @@ function bindTastes(v) {
 function ttStyle() { // стили теста вкусов — один раз из JS
   if (document.getElementById('tt-style')) return;
   const s = document.createElement('style'); s.id = 'tt-style';
-  s.textContent = `.tt-stack{position:relative;height:336px;margin:14px 0 18px}
+  s.textContent = `.tt-stack{position:relative;height:350px;margin:14px 0 18px}
 .tt-card{position:absolute;inset:0;display:flex;flex-direction:column;overflow:hidden;border-radius:var(--r);background:var(--surface);border:1px solid var(--line);touch-action:none;user-select:none;-webkit-user-select:none;cursor:grab;will-change:transform}
 .tt-card.tt-back{transform:scale(.95) translateY(10px);pointer-events:none;cursor:default}
-.tt-img{position:relative;height:220px;flex:none;background:var(--surface2);overflow:hidden}
+.tt-img{position:relative;height:190px;flex:none;background:var(--surface2);overflow:hidden}
 .tt-img img{width:100%;height:100%;object-fit:cover;display:block;pointer-events:none}
 .tt-ph{width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:var(--surface2);color:var(--muted);font-family:var(--display);font-size:92px;line-height:1}
 .tt-name{margin:14px 16px 4px;font-weight:700;font-size:18px;line-height:1.25;color:var(--fg)}
@@ -1519,7 +1519,7 @@ function ttStyle() { // стили теста вкусов — один раз �
 .tt-btn{width:64px;height:64px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:26px;line-height:1;cursor:pointer;padding:0}
 .tt-btn.tt-x{background:var(--surface);border:1px solid var(--line);color:var(--muted)}
 .tt-btn.tt-h{background:var(--gold);border:0;color:#fff}
-.tt-btn.tt-nv{width:52px;height:52px;align-self:center;background:var(--surface);border:1px solid #d4574f;color:#d4574f;font-size:15px;font-weight:800}
+.tt-ing{margin-top:4px;line-height:1.35;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
 .tt-never{left:50%;top:auto;bottom:16px;color:#d4574f;transform:translateX(-50%)}
 .tt-res{display:grid;gap:12px}.tt-res h4{margin:4px 0 0}
 .tt-chk{display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line)}.tt-chk input{width:20px;height:20px}
@@ -1527,20 +1527,23 @@ function ttStyle() { // стили теста вкусов — один раз �
   document.head.appendChild(s);
 }
 /* Тест вкусов v2 (docs/TASTE_TEST.md): один набор блюд для всех (TT_SET в data.js), работает без ключа.
-   Отбор колоды — по исключениям человека (тип питания, аллергии, «не люблю»), затем ~14 карточек с наибольшим охватом
+   Отбор колоды — по исключениям человека (тип питания, аллергии, «не люблю»), затем 24 карточки: сперва классика, потом с наибольшим охватом
    белков, гарниров, кухонь, уровней и времени готовки. Ответ: нравится +1, не нравится −1, никогда −3 (и предложение исключить продукт). */
-const TT_N = 14, TT_LVL = [5, 5, 4], TT_MEAL = {b: 4, l: 3, d: 4, s: 3}, TT_LVN = ['Классика', 'Необычное', 'Экзотика'];
+const TT_N = 30, TT_LVL = [99, 3, 4], TT_MEAL = {b: 7, l: 7, d: 8, s: 6}, TT_LVN = ['Классика', 'Необычное', 'Экзотика'];
 const ttPool = () => (typeof TT_SET === 'undefined' ? [] : TT_SET).map(d => Object.assign({}, d, {cuisine: TT_LVN[d.lvl], ing: d.ing.map(i => Object.assign({}, i))}))
   .filter(d => allowedByDiet(d) && !isBanned(d));
-function ttDeck(pool) { // жадный охват: квоты уровней и приёмов + новые белки, гарниры, кухни, разделы, острота
-  const out = [], seen = new Set(), lv = [0, 0, 0], ml = {b: 0, l: 0, d: 0, s: 0}, left = pool.slice();
+function ttDeck(pool) { // вся подходящая классика (core) + жадный добор остального: квоты уровней и приёмов, новые белки, гарниры, кухни, разделы, острота
+  const out = pool.filter(d => d.core).slice(0, TT_N), seen = new Set(), lv = [0, 0, 0], ml = {b: 0, l: 0, d: 0, s: 0}, left = pool.filter(d => !d.core);
   const feats = d => [...d.main.map(x => 'p:' + x), ...d.side.map(x => 'g:' + x), 'c:' + d.ct, 's:' + d.section, ...(d.spicy >= 2 ? ['spicy'] : [])];
+  out.forEach(d => { lv[d.lvl]++; ml[d.types[0]]++; feats(d).forEach(f => seen.add(f)); });
+  const extra = [0, 0, 0];
   while (out.length < TT_N && left.length) {
     let best = -1, bs = -1e9;
     left.forEach((d, k) => { const m = d.types[0];
-      const s = (lv[d.lvl] < TT_LVL[d.lvl] ? 3 : -4) + (ml[m] < TT_MEAL[m] ? 2 : -3) + feats(d).filter(f => !seen.has(f)).length * 1.5 - k * 0.01;
+      const s = (extra[d.lvl] < TT_LVL[d.lvl] ? (d.lvl === 2 ? 5 : 3) : -4) + (ml[m] < TT_MEAL[m] ? 2 : -3) + feats(d).filter(f => !seen.has(f)).length * 1.5 - k * 0.01;
       if (s > bs) { bs = s; best = k; } });
-    const d = left.splice(best, 1)[0]; out.push(d); lv[d.lvl]++; ml[d.types[0]]++; feats(d).forEach(f => seen.add(f));
+    const d = left.splice(best, 1)[0]; out.push(d); lv[d.lvl]++; extra[d.lvl]++; ml[d.types[0]]++; feats(d).forEach(f => seen.add(f));
+    if (pool.filter(x => x.core).length >= 18 && extra[1] >= TT_LVL[1] && extra[2] >= TT_LVL[2]) break; // классики хватает — добрали необычное и экзотику и хватит
   }
   const by = {b: [], l: [], d: [], s: []}; out.forEach(d => by[d.types[0]].push(d)); // порядок показа: приёмы по кругу
   const deck = []; for (let k = 0; deck.length < out.length; k++) ['b', 'l', 'd', 's'].forEach(m => { if (by[m][k]) deck.push(by[m][k]); });
@@ -1557,6 +1560,9 @@ function ttProfile(ans) { // ans: [{d, v}] → уровни кухни, балл
   const long = acc['sec:2'], sections = long && long[0] / long[1] < 0 ? [0, 1] : long && long[0] / long[1] > 0.3 ? [0, 1, 2] : null;
   return {v: 2, at: Date.now(), total: ans.length, scores, seen, lvl, sections, liked: ans.filter(a => a.v > 0).map(a => a.d.id), never: ans.filter(a => a.v < -1).map(a => a.d.id)};
 }
+const TT_ING_SKIP = ['sunoil', 'oliveoil', 'herbs', 'salt', 'black_pepper', 'bay_leaf', 'water'];
+const ttIng = d => d.ing.filter(i => !TT_ING_SKIP.includes(i.id) && i.g >= 3).map(i => i.name.replace(/\s*\(.*?\)|,.*$/g, '').toLowerCase()) // состав на карточке: без масла, соли и специй
+  .filter((n, k, a) => a.indexOf(n) === k).slice(0, 9).join(', ');
 const ttName = id => String((typeof TT_NAMES !== 'undefined' && TT_NAMES[id]) || id).toLowerCase();
 function ttSummary(P) { // чипы «любит» / «не любит» по продуктам и кухням
   const CT = {russian: 'русская', european: 'европейская', italian: 'итальянская', mediterranean: 'средиземноморская', scandinavian: 'скандинавская', caucasian: 'кавказская', mexican: 'мексиканская', asian: 'азиатская', middle_eastern: 'восточная', central_asian: 'среднеазиатская', indian: 'индийская'};
@@ -1583,7 +1589,7 @@ async function tasteTest(mode, onDone) {
     if (e.key === 'ArrowRight') { e.preventDefault(); answer(1); } else if (e.key === 'ArrowLeft') { e.preventDefault(); answer(-1); } else if (e.key === 'ArrowDown') { e.preventDefault(); answer(-3); }
   };
   const cleanup = () => document.removeEventListener('keydown', onKey);
-  const cardHtml = (d, back) => `<div class="tt-card${back ? ' tt-back' : ''}" ${back ? 'aria-hidden="true"' : 'id="tt-top"'}><div class="tt-img">${d.img ? `<img src="${esc(d.img)}" alt="" draggable="false">` : `<div class="tt-ph">${esc(([...d.name][0] || '').toUpperCase())}</div>`}${back ? '' : '<span class="tt-stamp tt-like">Нравится</span><span class="tt-stamp tt-nope">Не моё</span><span class="tt-stamp tt-never">Никогда</span>'}</div><div class="tt-name">${esc(d.name)}</div><div class="tt-meta">${d.time} мин · ${d.kcal} ккал · ${TT_LVN[d.lvl]}</div></div>`;
+  const cardHtml = (d, back) => `<div class="tt-card${back ? ' tt-back' : ''}" ${back ? 'aria-hidden="true"' : 'id="tt-top"'}><div class="tt-img">${d.img ? `<img src="${esc(d.img)}" alt="" draggable="false">` : `<div class="tt-ph">${esc(([...d.name][0] || '').toUpperCase())}</div>`}${back ? '' : '<span class="tt-stamp tt-like">Нравится</span><span class="tt-stamp tt-nope">Не моё</span><span class="tt-stamp tt-never">Никогда</span>'}</div><div class="tt-name">${esc(d.name)}</div><div class="tt-meta">${d.time} мин · ${d.kcal} ккал · ${TT_LVN[d.lvl]}</div><div class="tt-meta tt-ing">${esc(ttIng(d))}</div></div>`;
   const paint = () => {
     $('#tt-eb', root).textContent = (mode === 'family' ? 'Выбирайте вместе · ' : 'Тест вкусов · ') + `${i + 1} из ${deck.length}`;
     $('#tt-stack', root).innerHTML = (deck[i + 1] ? cardHtml(deck[i + 1], true) : '') + cardHtml(deck[i], false);
@@ -1614,10 +1620,10 @@ async function tasteTest(mode, onDone) {
   };
   sheet(`<p class="eyebrow" id="tt-eb"></p><h3>Нравится?</h3><p class="hint">Вправо — нравится, влево — не моё, вниз — никогда.</p>
    <div class="tt-stack" id="tt-stack"></div>
-   <div class="tt-btns"><button class="tt-btn tt-x" id="tt-no" aria-label="Не моё">✕</button><button class="tt-btn tt-nv" id="tt-nv" aria-label="Никогда">✕✕</button><button class="tt-btn tt-h" id="tt-yes" aria-label="Нравится">♥</button></div>
+   <div class="tt-btns"><button class="tt-btn tt-x" id="tt-no" aria-label="Не моё">✕</button><button class="tt-btn tt-h" id="tt-yes" aria-label="Нравится">♥</button></div>
    <button class="tt-skip" id="tt-end">${ans.length ? 'Закончить' : 'Пропустить тест'}</button>`, el => {
     root = el; paint();
-    $('#tt-no', el).onclick = () => answer(-1); $('#tt-yes', el).onclick = () => answer(1); $('#tt-nv', el).onclick = () => answer(-3);
+    $('#tt-no', el).onclick = () => answer(-1); $('#tt-yes', el).onclick = () => answer(1);
     $('#tt-end', el).onclick = () => { if (busy) return; cleanup(); if (ans.length >= 4) finish(); else { closeSheet(); onDone && onDone(); } };
     document.addEventListener('keydown', onKey);
   }, {full: true});
