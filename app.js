@@ -1396,7 +1396,7 @@ function viewSettings() {
     v.innerHTML = `${appbar('Настройки', 'Профиль и приложение', {back: true})}
     <button class="profile" data-person="${me.id}"><span class="mono">${esc(me.name.slice(0, 1).toUpperCase())}</span><span><b>${esc(me.name)}</b><small>${r0(t.E)} ккал · белок ${r0(t.P)} г в день</small></span>${ic('chev', 'sm')}</button>
     <nav class="rows">${SET_PAGES.map(([k, t, s]) => `<button class="row" data-set="${k}"><span class="medal">${ic(SET_IC[k])}</span><span><b>${t}</b><small>${s}</small></span>${ic('chev', 'sm')}</button>`).join('')}</nav>
-    <p class="hint center">Мой рацион · версия 0.9.8</p>`;
+    <p class="hint center">Мой рацион · версия 0.9.9</p>`;
     v.querySelectorAll('[data-set]').forEach(b => b.onclick = () => { S.ui.set = b.dataset.set; save(); render(); });
     v.querySelector('[data-person]').onclick = () => editPerson(me);
     return;
@@ -1504,10 +1504,10 @@ function bindTastes(v) {
 function ttStyle() { // стили теста вкусов — один раз из JS
   if (document.getElementById('tt-style')) return;
   const s = document.createElement('style'); s.id = 'tt-style';
-  s.textContent = `.tt-stack{position:relative;height:350px;margin:14px 0 18px}
-.tt-card{position:absolute;inset:0;display:flex;flex-direction:column;overflow:hidden;border-radius:var(--r);background:var(--surface);border:1px solid var(--line);touch-action:none;user-select:none;-webkit-user-select:none;cursor:grab;will-change:transform}
+  s.textContent = `.tt-stack{display:grid;max-width:480px;margin:14px auto 18px}
+.tt-card{grid-area:1/1;position:relative;display:flex;flex-direction:column;overflow:hidden;border-radius:var(--r);background:var(--surface);border:1px solid var(--line);touch-action:none;user-select:none;-webkit-user-select:none;cursor:grab;will-change:transform}
 .tt-card.tt-back{transform:scale(.95) translateY(10px);pointer-events:none;cursor:default}
-.tt-img{position:relative;height:190px;flex:none;background:var(--surface2);overflow:hidden}
+.tt-img{position:relative;aspect-ratio:4/3;flex:none;background:var(--surface2);overflow:hidden}
 .tt-img img{width:100%;height:100%;object-fit:cover;display:block;pointer-events:none}
 .tt-ph{width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:var(--surface2);color:var(--muted);font-family:var(--display);font-size:92px;line-height:1}
 .tt-name{margin:14px 16px 4px;font-weight:700;font-size:18px;line-height:1.25;color:var(--fg)}
@@ -1530,7 +1530,7 @@ function ttStyle() { // стили теста вкусов — один раз �
    Отбор колоды — по исключениям человека (тип питания, аллергии, «не люблю»), затем 24 карточки: сперва классика, потом с наибольшим охватом
    белков, гарниров, кухонь, уровней и времени готовки. Ответ: нравится +1, не нравится −1, никогда −3 (и предложение исключить продукт). */
 const TT_N = 30, TT_LVL = [99, 3, 4], TT_MEAL = {b: 7, l: 7, d: 8, s: 6}, TT_LVN = ['Классика', 'Необычное', 'Экзотика'];
-const ttPool = () => (typeof TT_SET === 'undefined' ? [] : TT_SET).map(d => Object.assign({}, d, {cuisine: TT_LVN[d.lvl], ing: d.ing.map(i => Object.assign({}, i))}))
+const ttPool = () => (typeof TT_SET === 'undefined' ? [] : TT_SET).map(d => Object.assign({}, d, {cuisine: TT_LVN[d.lvl], img: 'img/tt/' + d.id + '.webp', ing: d.ing.map(i => Object.assign({}, i))}))
   .filter(d => allowedByDiet(d) && !isBanned(d));
 function ttDeck(pool) { // вся подходящая классика (core) + жадный добор остального: квоты уровней и приёмов, новые белки, гарниры, кухни, разделы, острота
   const out = pool.filter(d => d.core).slice(0, TT_N), seen = new Set(), lv = [0, 0, 0], ml = {b: 0, l: 0, d: 0, s: 0}, left = pool.filter(d => !d.core);
@@ -1589,11 +1589,12 @@ async function tasteTest(mode, onDone) {
     if (e.key === 'ArrowRight') { e.preventDefault(); answer(1); } else if (e.key === 'ArrowLeft') { e.preventDefault(); answer(-1); } else if (e.key === 'ArrowDown') { e.preventDefault(); answer(-3); }
   };
   const cleanup = () => document.removeEventListener('keydown', onKey);
-  const cardHtml = (d, back) => `<div class="tt-card${back ? ' tt-back' : ''}" ${back ? 'aria-hidden="true"' : 'id="tt-top"'}><div class="tt-img">${d.img ? `<img src="${esc(d.img)}" alt="" draggable="false">` : `<div class="tt-ph">${esc(([...d.name][0] || '').toUpperCase())}</div>`}${back ? '' : '<span class="tt-stamp tt-like">Нравится</span><span class="tt-stamp tt-nope">Не моё</span><span class="tt-stamp tt-never">Никогда</span>'}</div><div class="tt-name">${esc(d.name)}</div><div class="tt-meta">${d.time} мин · ${d.kcal} ккал · ${TT_LVN[d.lvl]}</div><div class="tt-meta tt-ing">${esc(ttIng(d))}</div></div>`;
+  const cardHtml = (d, back) => `<div class="tt-card${back ? ' tt-back' : ''}" ${back ? 'aria-hidden="true"' : 'id="tt-top"'}><div class="tt-img">${d.img ? `<img src="${esc(d.img)}" alt="" draggable="false" onerror="this.outerHTML='<div class=&quot;tt-ph&quot;>${esc(([...d.name][0] || '').toUpperCase())}</div>'">` : `<div class="tt-ph">${esc(([...d.name][0] || '').toUpperCase())}</div>`}${back ? '' : '<span class="tt-stamp tt-like">Нравится</span><span class="tt-stamp tt-nope">Не моё</span><span class="tt-stamp tt-never">Никогда</span>'}</div><div class="tt-name">${esc(d.name)}</div><div class="tt-meta">${d.time} мин · ${d.kcal} ккал · ${TT_LVN[d.lvl]}</div><div class="tt-meta tt-ing">${esc(ttIng(d))}</div></div>`;
   const paint = () => {
     $('#tt-eb', root).textContent = (mode === 'family' ? 'Выбирайте вместе · ' : 'Тест вкусов · ') + `${i + 1} из ${deck.length}`;
     $('#tt-stack', root).innerHTML = (deck[i + 1] ? cardHtml(deck[i + 1], true) : '') + cardHtml(deck[i], false);
     bindDrag($('#tt-top', root));
+    deck.slice(i + 1, i + 4).forEach(d => { if (d.img) new Image().src = d.img; }); // следующие карточки подгружаются заранее
   };
   const answer = v => {
     if (busy || i >= deck.length) return; busy = true;
