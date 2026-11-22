@@ -63,7 +63,8 @@ const defaults = () => ({
   people: [],
   settings: {meals: 4, mealsAuto: false, planLen: 7, norms: 'NASEM', diet: 'all', forbidden: [], allergens: [], medical: {}, accessKey: '', serverUrl: DEFAULT_SERVER, botUrl: ''},
   marks: {like: [], notes: {}},
-  collect: {budget: 6000, sections: [0, 1], homeOn: false, home: [], cook2: false, otherCuisines: false},
+  collect: {budget: 6000, sections: [0, 1], sectionsBySlot: {}, homeOn: false, home: [], cook2: false, otherCuisines: false},
+  analytics: {v: 1, days: {}},
   lib: {}, banned: {ids: [], names: []}, cool: {}, seenEver: [], dishStore: {}, imports: [], taste: {w: {}, mode: 'self', done: false}, aiTimes: [], firstCollect: null,
   plan: null, feed: null, lastWeek: null, access: null, fbq: [], apiLog: null, pricesAt: 0, pool: null,
   shop: {checked: {}, group: false, range: 'all', bought: {}, lastBought: null},
@@ -79,6 +80,11 @@ try { S = Object.assign(defaults(), JSON.parse(localStorage.getItem(KEY) || '{}'
   (S.people || []).forEach(p => { p.goal = safeGoal(p, p.goal); if (!p.wAt) p.wAt = Date.now();
     if (!p.work) { const a = +p.activity || 1.6; Object.assign(p, a < 1.5 ? {work: 'sit', trN: 0} : a < 1.7 ? {work: 'sit', trN: 3, trMin: 45, sport: 'mid'} : a < 1.85 ? {work: 'stand', trN: 4, trMin: 45, sport: 'mid'} : a < 2 ? {work: 'phys', trN: 0} : {work: 'phys', trN: 5, trMin: 60, sport: 'hard'}); } });
   S.rareLog = S.rareLog || [];
+  S.analytics = S.analytics && S.analytics.v === 1 ? S.analytics : {v: 1, days: {}};
+  S.analytics.days = S.analytics.days || {};
+  S.collect.sectionsBySlot = S.collect.sectionsBySlot || {};
+  S.ui.wishDates = [];
+  delete S.ui.autoProgress;
   if (!S.srvDefault) { if (!S.settings.serverUrl) S.settings.serverUrl = DEFAULT_SERVER; S.srvDefault = 1; } // 0.8.4: адрес сервера по умолчанию (один раз)
   if (!S.themeV) { S.theme = 'light'; S.themeV = 2; } // 0.9.3: новая светлая тема «крем, олива, коралл» — один раз для всех
   if (S.srvDefault < 2) { if (S.settings.serverUrl.trim().replace(/\/$/, '') === OLD_SERVER) S.settings.serverUrl = DEFAULT_SERVER; S.srvDefault = 2; } // 0.9.2: старый адрес → переходник
@@ -90,7 +96,12 @@ try { S = Object.assign(defaults(), JSON.parse(localStorage.getItem(KEY) || '{}'
 })();
 // при каждом открытии выбран сегодняшний день
 S.ui.off = 0; if (S.plan) S.ui.day = Math.max(0, Math.min(S.plan.len - 1, Math.round((new Date(new Date().setHours(12, 0, 0, 0)) - new Date(S.plan.start + 'T12:00:00')) / 864e5)));
-const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} schedulePool(); };
+const save = () => {
+  syncAnalytics();
+  try { localStorage.setItem(KEY, JSON.stringify(S)); }
+  catch (e) { if (!save.warned) { save.warned = true; toast('Не удалось сохранить данные на устройстве. Проверьте свободное место в браузере.'); } }
+  schedulePool();
+};
 
 /* ---------- Даты ---------- */
 const DOW = ['Вс','Пн','Вт','Ср','Чт','Пт','Сб'];
@@ -369,12 +380,16 @@ function budgetPenalty(d, slotIdx) {
 }
 
 /* ---------- Круги: свои для каждого раздела сложности ---------- */
-const secs = () => (S.collect.sections && S.collect.sections.length ? [...S.collect.sections].sort() : [1]);
+const secs = slot => {
+  const fallback = S.collect.sections?.length ? S.collect.sections : [0, 1];
+  const at = i => { const a = S.collect.sectionsBySlot?.[pattern().length + ':' + i]; return a?.length ? a : fallback; };
+  return [...new Set(typeof slot === 'number' ? at(slot) : pattern().flatMap((_, i) => at(i)))].filter(i => [0, 1, 2, 3].includes(i)).sort();
+};
 const sysKey = sec => 'any|' + sec;
-const curSystems = () => secs().map(sysKey);
+const curSystems = slot => secs(slot).map(sysKey);
 const secLabel = () => secs().map(i => SECTIONS[i][0].toLowerCase()).join(', ');
-function libMerged(type, which) { // круги выбранных разделов, перемешанные по очереди
-  const lists = curSystems().map(k => lib(k, type)[which]), out = [];
+function libMerged(type, which, slot) { // круги выбранных разделов, перемешанные по очереди
+  const lists = curSystems(slot).map(k => lib(k, type)[which]), out = [];
   for (let i = 0; lists.some(l => i < l.length); i++) lists.forEach(l => { if (i < l.length) out.push(l[i]); });
   return out;
 }
@@ -411,7 +426,7 @@ function unban(id) { const d = getDish(id); feedback(d, 'undislike'); S.banned.i
 function fitsSlot(d, ctx, relaxed) {
   if (!d || !d.types.includes(ctx.type) || isBanned(d) || !allowedByDiet(d)) return false;
   if (ctx.seen.has(d.id) || (relaxed !== 'repeat' && usedInPlan(d.id))) return false; // И2: в крайнем случае повтор блюда недели лучше пустого приёма
-  if (relaxed !== 'section' && relaxed !== 'repeat' && !secs().includes(sectionOf(d))) return false;
+  if (!secs(ctx.slot).includes(sectionOf(d))) return false;
   if (d.src !== 'server' && budgetPenalty(d, ctx.slot) >= 99) return false; // цену новых блюд подбирает сервер по budget_left
   if (!safeFit(d, ctx.day, ctx.slot).ok) return false;
   if (!relaxed && !softOk(d, ctx.day, ctx.slot)) return false; // И9: мягкие пределы — только при обычном подборе
@@ -428,7 +443,7 @@ function homeBonus(d, day) {
 }
 const rank = (list, ctx) => list.map(d => [d, scoreDish(d, ctx.tg) + budgetPenalty(d, ctx.slot) + homeBonus(d, ctx.day) + (varietyOk(d, ctx.day, ctx.slot) ? 0 : 0.5)]).sort((a, b) => a[1] - b[1]).map(x => x[0]);
 function pickCircle(which, ctx) { // сначала блюда без повтора основы дня, потом любые
-  const ids = libMerged(ctx.type, which);
+  const ids = libMerged(ctx.type, which, ctx.slot);
   for (const strict of [true, false]) for (const id of ids) { const d = getDish(id); if (fitsSlot(d, ctx) && (!strict || varietyOk(d, ctx.day, ctx.slot))) return d; }
   return null;
 }
@@ -455,7 +470,7 @@ function myCuisine(d) { // «моя» кухня: вес теста ≥ сред
 }
 let noTaste = false; // «Другие кухни»: среди «не моих» — с равными весами
 function pickNewLocal(ctx, relaxed) {
-  const now = Date.now(), seenEver = new Set(S.seenEver), inLib = new Set([...libMerged(ctx.type, 'main'), ...libMerged(ctx.type, 'sec')]);
+  const now = Date.now(), seenEver = new Set(S.seenEver), inLib = new Set([...libMerged(ctx.type, 'main', ctx.slot), ...libMerged(ctx.type, 'sec', ctx.slot)]);
   const imp = S.imports.filter(x => x.share > 0);
   if (imp.length && Math.random() * 100 < imp[0].share) {
     const c = rank(imp[0].ids.map(getDish).filter(d => d && !inLib.has(d.id) && fitsSlot(d, ctx, true)), ctx); if (c[0]) return c[0];
@@ -481,7 +496,7 @@ async function nextCard() {
   else if (pk) { dish = pk; src = 'new'; }
   else if (F.counter % 5 === 0) { dish = await pickNew(ctx); src = 'new'; }
   else {
-    const full = libMerged(ctx.type, 'main').length >= capacity(ctx.type);
+    const full = libMerged(ctx.type, 'main', ctx.slot).length >= capacity(ctx.type);
     const order = full ? ['main', 'main', 'main', 'sec'] : ['main', 'sec', 'new'];
     const start = (F.rr = (F.rr || 0) + 1) % order.length;
     const seq = [...order.slice(start), ...order.slice(0, start), 'main', 'sec', 'new'];
@@ -581,8 +596,8 @@ const MICRO_KEYS = ['vc', 'va', 'ca', 'fe', 'mg', 'k', 'b12', 'd', 'fol', 'n3', 
 function fromApi(o) { // блюдо API.md §4 → внутренний формат (хранится в кэше целиком)
   if (!o || !o.id || !o.name || !Array.isArray(o.ing) || !o.ing.length) throw new ApiError('bad_request', 'Неполное блюдо от сервера');
   return {id: String(o.id), num: o.num, section: o.section, cuisine: LEVELS[o.cuisine] || '', lvl: o.cuisine, name: String(o.name), types: o.types || '', time: +o.time || 30, diff: +o.diff || 3, salt: +o.salt || 0,
-    steps: (o.steps || []).map(String), allergens: o.allergens || [], flags: o.flags || '', cost: o.base ? +o.base.cost : undefined, pclass: o.pclass, base: o.base, src: 'server', priceAt: Date.now(), rare: !!o.rare, risk: Array.isArray(o.risk) ? o.risk : [],
-    ing: o.ing.map(x => { const m = Array.isArray(x.micro) ? x.micro : []; const r = {id: x.id, name: x.name, cat: x.cat, unit: x.unit || 'g', pcs_g: x.pcs_g, price: +x.price || 0, kcal: +x.kcal || 0, p: +x.p || 0, f: +x.f || 0, c: +x.c || 0, fib: +x.fib || 0, flags: x.flags || '', allergens: x.allergens || [], g: +x.g || 0, rare: +x.rare || 0};
+    tips: o.tips || '', servings: o.servings, cuisineTag: o.cuisine_tag, nutr: o.nutr || null, strengths: o.strengths || [], steps: (o.steps || []).map(String), allergens: o.allergens || [], flags: o.flags || '', cost: o.base ? +o.base.cost : undefined, pclass: o.pclass, base: o.base, src: 'server', priceAt: Date.now(), rare: !!o.rare, risk: Array.isArray(o.risk) ? o.risk : [],
+    ing: o.ing.map(x => { const m = Array.isArray(x.micro) ? x.micro : []; const r = {id: x.id, name: x.name, cat: x.cat, nutrients: x.nutrients || null, role: x.role || '', prep: x.prep || '', unit: x.unit || 'g', pcs_g: x.pcs_g, price: +x.price || 0, kcal: +x.kcal || 0, p: +x.p || 0, f: +x.f || 0, c: +x.c || 0, fib: +x.fib || 0, flags: x.flags || '', allergens: x.allergens || [], g: +x.g || 0, rare: +x.rare || 0};
       MICRO_KEYS.forEach((k, i) => r[k] = +m[i] || 0); return r; })};
 }
 function eaterReq(day, slot) { // API §3 `eater`: главный едок — цели дня и что уже съел сегодня (без веса, возраста, пола, имён)
@@ -595,7 +610,7 @@ function eaterReq(day, slot) { // API §3 `eater`: главный едок — �
 function dishRequest(ctx, extra = {}) { // тело /v1/dish: только нормы и параметры, без имён и личных данных
   const pat = pattern(), st = S.settings, ex = new Set();
   allSlots().forEach(sl => ex.add(sl.dish.id)); (ctx.seen || []).forEach(id => ex.add(id));
-  return Object.assign({meal: pat[ctx.slot][0], sections: secs(), count: 1, eater: eaterReq(ctx.day, ctx.slot), week: S.plan ? (w => Object.assign(w, {eggs_left: Math.floor(w.eggs_left * 10) / 10, redmeat_g_left: Math.floor(w.redmeat_g_left)}))(weekLeft(ctx.day, ctx.slot)) : undefined, deficits: weekDeficits(),
+  return Object.assign({meal: pat[ctx.slot][0], sections: secs(ctx.slot), count: 1, eater: eaterReq(ctx.day, ctx.slot), week: S.plan ? (w => Object.assign(w, {eggs_left: Math.floor(w.eggs_left * 10) / 10, redmeat_g_left: Math.floor(w.redmeat_g_left)}))(weekLeft(ctx.day, ctx.slot)) : undefined, deficits: weekDeficits(),
     meal_share: pat[ctx.slot][2] / 100, budget_left: Math.max(0, r0(budgetLeft())), meals_left: mealsLeft(), meals_per_day: S.plan.meals,
     allergies: st.allergens || [], diet: DIET_API[st.diet] || 'all', forbid: st.forbidden, exclude: [...ex].filter(id => !DBMAP[id]).slice(-300), other_cuisines: !!S.collect.otherCuisines}, extra);
 }
@@ -630,12 +645,13 @@ function noteServerError(e) {
    до 200, новые встают в конец. С тем же запросом уходят отзывы, вкусы и раз в неделю — цены кругов.
    Смена вкусов, аллергий, типа питания, разделов, бюджета или людей — запас очищается и качается заново. */
 const POOL_TOTAL = 200, POOL_LOW = 100;
-function poolTarget(type) { const pat = pattern(); return Math.round(POOL_TOTAL * pat.filter(m => m[0] === type).length / pat.length); }
+const poolTotal = () => pattern().length === 3 ? 198 : POOL_TOTAL;
+function poolTarget(type) { const pat = pattern(); return Math.round(poolTotal() * pat.filter(m => m[0] === type).length / pat.length); }
 const poolSize = P => Object.values(P.q).reduce((s, q) => s + q.length, 0);
 function poolSig() {
   const st = S.settings, t = S.taste;
   return JSON.stringify([st.serverUrl, st.accessKey, st.diet, [...(st.allergens || [])].sort(), [...(st.forbidden || [])].map(s => String(s).toLowerCase().trim()).sort(), secs(), !!S.collect.otherCuisines,
-    t.lvl || t.w, pattern().length, Math.round((+S.collect.budget || 0) / 500), S.people.map(p => [p.sex, p.age, p.height, p.weight, effGoal(p), p.work, p.trN, p.trMin, p.sport])]);
+    t.pendingLvl || t.lvl || t.w, S.collect.sectionsBySlot, pattern().length, S.settings.planLen, +S.collect.budget || 0, S.people.map(p => [p.sex, p.age, p.height, p.weight, effGoal(p), p.work, p.trN, p.trMin, p.sport])]);
 }
 function poolState() {
   const sig = poolSig();
@@ -726,6 +742,8 @@ const closeSheet = () => { $('#sheet').hidden = true; document.body.classList.re
 })();
 function applyTheme() { const r = document.documentElement; if (S.theme === 'system') r.removeAttribute('data-theme'); else r.setAttribute('data-theme', S.theme); r.setAttribute('data-accent', S.accent || 'gold'); }
 const IC = {
+  stream: '<rect x="4" y="3" width="16" height="18" rx="3"/><path d="M8 8h8M8 12h8M8 16h5"/>',
+  analytics: '<path d="M4 19.5h16M7 16V11M12 16V5M17 16V8"/>',
   plus: '<path d="M12 5v14M5 12h14"/>', down: '<path d="M6 9.5l6 6 6-6"/>',
  plan: '<rect x="3.5" y="5" width="17" height="15.5" rx="3.5" fill="currentColor" fill-opacity=".14"/><path d="M3.5 10h17M8 3v4M16 3v4M8.5 14.5h3M8.5 17h6"/>',
  shop: '<path d="M5 8.5h14l-1.2 10.2a2 2 0 0 1-2 1.8H8.2a2 2 0 0 1-2-1.8z" fill="currentColor" fill-opacity=".14"/><path d="M9 10V7a3 3 0 0 1 6 0v3"/>',
@@ -753,7 +771,7 @@ let lastView = '';
 function render() {
   applyTheme(); rollWeek();
   const vk = (S.feed && S.feed.active) ? 'feed' : S.ui.tab + (S.ui.set || ''); if (vk !== lastView) { const sc = $('#scroller'); if (sc) sc.scrollTop = 0; window.scrollTo(0, 0); lastView = vk; }
-  document.querySelectorAll('.tab').forEach(b => b.setAttribute('aria-current', b.dataset.tab === S.ui.tab ? 'page' : 'false'));
+  document.querySelectorAll('.tab').forEach(b => { b.setAttribute('aria-current', b.dataset.tab === S.ui.tab ? 'page' : 'false'); b.disabled = !!autoRun; });
   const v = $('#view');
   if (!S.onboarded || !S.people.length) { v.innerHTML = viewOnboard(); bindOnboard(); $('#nav').hidden = true; return; }
   $('#nav').hidden = false;
@@ -763,7 +781,8 @@ function render() {
     else v.innerHTML = viewFeed();
     bindFeed(); $('#nav').hidden = true; return; }
   if (S.ui.tab === 'settings') $('#nav').hidden = true;
-  ({plan: viewPlan, collect: viewCollect, shop: viewShop, settings: viewSettings})[S.ui.tab]();
+  document.body.classList.toggle('empty-stream', S.ui.tab === 'stream');
+  ({plan: viewPlan, stream: viewStream, analytics: viewAnalytics, collect: viewCollect, shop: viewShop, settings: viewSettings}[S.ui.tab] || viewPlan)();
 }
 
 /* ---------- Онбординг / форма человека ---------- */
@@ -1024,75 +1043,218 @@ function dayPassport(day) { // только калории, БЖУ и клетч
   ${S.people.length > 1 ? `<h4>По людям</h4><ul class="ing">${S.people.map(p => { const sh = personTargets(p).E / fam.E, ad = (planAddons()[day] || []).filter(x => x.pid === p.id).reduce((o, x) => { ['kcal', 'p', 'f', 'c'].forEach(k => o[k] += x.n[k]); return o; }, {kcal: 0, p: 0, f: 0, c: 0}); return `<li><span>${esc(p.name)}</span><b>${r0(tm.kcal * sh + ad.kcal)} ккал · Б ${r0(tm.p * sh + ad.p)} · Ж ${r0(tm.f * sh + ad.f)} · У ${r0(tm.c * sh + ad.c)}</b></li>`; }).join('')}</ul>` : ''}`, null, {full: true});
 }
 
+/* ---------- Аналитика: ежедневные снимки сохраняются дольше истории рецептов ---------- */
+function syncAnalytics() {
+  if (!S.people.length || typeof RacionAnalytics === 'undefined') return;
+  const today = iso(new Date()), ledger = S.analytics.days;
+  const capture = (plan, current) => {
+    if (!plan?.days) return;
+    const pat = PATTERNS[plan.meals]; if (!pat) return;
+    const addons = current ? planAddons() : [];
+    plan.days.forEach((day, i) => {
+      const date = addDays(plan.start, i);
+      if (date > today || (date < today && ledger[date])) return;
+      if (!day.slots.some(Boolean)) { if (date === today && current) delete ledger[date]; return; }
+      ledger[date] = RacionAnalytics.makeDay(day, date, S.people, {
+        targets: p => RacionAnalytics.targets(p, personTargets(p), microNorm(p, S.settings.norms)),
+        factors: (dish, slot) => S.people.map(p => Math.min(2.5, Math.max(.5, personTargets(p).E * pat[slot][2] / 100 / (nut(dish).kcal || 1)))),
+        addons: addons[i] || []
+      }, plan.meals);
+    });
+  };
+  capture(S.lastWeek, false); capture(S.plan, true);
+}
+function viewStream() { $('#view').innerHTML = '<section class="stream-blank" aria-label="Лента"></section>'; }
+function viewAnalytics() {
+  syncAnalytics();
+  const now = iso(new Date()), period = ['week', 'month', 'all'].includes(S.ui.analyticsPeriod) ? S.ui.analyticsPeriod : 'week';
+  const from = period === 'all' ? '0000-01-01' : addDays(now, period === 'week' ? -6 : -29);
+  const people = {}; Object.values(S.analytics.days).forEach(d => Object.entries(d.people || {}).forEach(([id, p]) => people[id] = p.name));
+  const selected = S.ui.analyticsPerson && people[S.ui.analyticsPerson] ? S.ui.analyticsPerson : 'all';
+  const a = RacionAnalytics.aggregate(S.analytics.days, from, now, selected);
+  const unit = {g: 'г', mg: 'мг', mcg: 'мкг', kcal: 'ккал'}, fmt = n => new Intl.NumberFormat('ru-RU', {maximumFractionDigits: n < 1 && n > 0 ? 3 : 1}).format(n);
+  const groups = [['vitamin', 'Витамины'], ['mineral', 'Минералы'], ['amino', 'Аминокислоты'], ['fat', 'Жирные кислоты'], ['macro', 'Белки, жиры и углеводы'], ['carb', 'Углеводы и клетчатка'], ['energy', 'Энергия'], ['other', 'Другие показатели']];
+  const upper = new Set(['na', 'sfa', 'sugar_add']);
+  const card = n => {
+    const v = a.values[n.id] || 0, target = a.targets[n.id], unknown = a.missing[n.id], hasTarget = target > 0;
+    const pct = hasTarget ? v / target * 100 : null, limit = upper.has(n.id), left = hasTarget ? Math.max(0, target - v) : 0;
+    const status = unknown ? 'Неполные данные' : !hasTarget ? 'Без отдельного ориентира' : limit ? (v > target ? 'Выше предела' : 'В пределах') : pct >= 90 ? 'Ориентир достигнут' : 'Есть недобор';
+    return `<article class="nutrient${unknown ? ' unknown' : ''}"><div class="nutrient-head"><h4>${esc(n.name)}</h4><span>${!unknown && pct != null ? r0(pct) + '%' : '—'}</span></div>
+      <div class="nutrient-amount">${unknown ? 'Не менее ' : ''}<b>${fmt(v)} ${unit[n.unit] || esc(n.unit)}</b>${hasTarget ? ` <span>из ${fmt(target)} ${unit[n.unit] || ''}${limit ? ' · предел' : ''}</span>` : ''}</div>
+      <div class="nutrient-track" ${hasTarget && !unknown ? `role="progressbar" aria-label="${esc(n.name)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.min(100, r0(pct))}" aria-valuetext="${r0(pct)} процентов"` : ''}><i class="${unknown ? 'partial' : limit && pct > 100 ? 'over' : !limit && pct < 90 ? 'low' : ''}" style="width:${unknown || !hasTarget ? 0 : Math.min(100, pct)}%"></i></div>
+      <p class="nutrient-status">${status}${!unknown && hasTarget && !limit && left > 0 ? ` · до ориентира ${fmt(left)} ${unit[n.unit] || ''}` : ''}</p></article>`;
+  };
+  $('#view').innerHTML = `${appbar('Аналитика', 'Питание в цифрах')}
+    <div class="analytics-controls"><label>Период<select id="a-period"><option value="week"${period === 'week' ? ' selected' : ''}>Последние 7 дней</option><option value="month"${period === 'month' ? ' selected' : ''}>Последние 30 дней</option><option value="all"${period === 'all' ? ' selected' : ''}>За всё время</option></select></label>
+    <label>Кто ест<select id="a-person"><option value="all">Вся семья</option>${Object.entries(people).map(([id, name]) => `<option value="${esc(id)}"${selected === id ? ' selected' : ''}>${esc(name)}</option>`).join('')}</select></label></div>
+    <section class="analytics-summary"><b>${a.days}</b><div>дней с сохранённым рационом<p>${period === 'all' ? 'За всё время использования' : period === 'week' ? 'За последние 7 дней' : 'За последние 30 дней'}</p></div></section>
+    <p class="hint analytics-note">По сохранённому рациону до сегодняшнего дня, включая неотмеченные приёмы. Пропущенные блюда исключены. Это состав меню, а не подтверждение съеденного. Ориентиры суммируются только за дни с данными.</p>
+    ${!a.days ? '<div class="empty"><h3>Здесь появится ваша аналитика</h3><p>Соберите рацион на сегодня. Витамины, минералы и аминокислоты появятся здесь автоматически.</p></div>' : groups.map(([g, title]) => `<section class="nutrient-group"><h3>${title}</h3>${RacionAnalytics.data.nutrients.filter(n => n.group === g).map(card).join('')}</section>`).join('')}
+    <p class="hint analytics-note">История за месяц и всё время накапливается на этом устройстве с версии 0.10.0. Доступные прошлые 7 дней перенесены. Полный состав рассчитан по ингредиентам и справочнику проекта; неизвестные значения не считаются нулевыми. Проценты — сравнение с ориентирами проекта, а не диагноз.</p>`;
+  $('#a-period').onchange = e => { S.ui.analyticsPeriod = e.target.value; save(); render(); };
+  $('#a-person').onchange = e => { S.ui.analyticsPerson = e.target.value; save(); render(); };
+}
+
 /* ---------- Сбор рациона ---------- */
+let autoRun = null;
 function viewCollect() {
-  const c = S.collect, st = S.settings, med = Object.values(st.medical).some(Boolean);
-  const per = st.planLen === 7 ? '7 дней' : '3 дня';
+  const c = S.collect, st = S.settings, med = Object.values(st.medical).some(Boolean), busy = !!autoRun;
+  const pat = pattern(), len = S.plan ? S.plan.len : st.planLen, start = S.plan ? S.plan.start : iso(new Date());
   const started = S.plan && S.plan.days.some(d => d.slots.some(Boolean));
-  const chipsList = (arr, attr) => arr.length ? `<div class="chips">${arr.map((w, i) => `<button class="chip x" data-${attr}="${i}">${esc(w)}</button>`).join('')}</div>` : '';
-  const pat = PATTERNS[S.plan ? S.plan.meals : mealsCount()], len = S.plan ? S.plan.len : st.planLen, start = S.plan ? S.plan.start : cycleStart(len);
-  const wishes = allSlots().filter(s => s.fromDesired && !s.leftover);
-  const sys = S.plan ? libSummary() : '';
-  $('#view').innerHTML = `${appbar('Сбор рациона', st.planLen === 7 ? '7 дней с сегодняшнего' : '3 дня с сегодняшнего')}
-  ${med ? '<div class="warn box">Отмечено состояние здоровья, при котором автоматический рацион не подходит. Составьте питание вместе с врачом.</div>' : ''}
-  <div class="panel">
-   <label class="field"><span><em>Бюджет семьи на ${per}, ₽</em><input id="c-budget" type="number" inputmode="numeric" min="0" step="100" value="${c.budget}"></span></label>
-   <p class="budgetnote${lowBudget() ? ' low' : ''}">${lowBudget() ? `≈ ${r0(baseBudget() / (st.planLen || 7) * 7 / 10) * 10} ₽ в неделю на взрослого — полноценный рацион в такой бюджет не уложится. Подберу самые экономные блюда.` : `≈ ${r0(baseBudget() / (st.planLen || 7) * 7 / 10) * 10} ₽ в неделю на взрослого${S.plan ? ` · осталось ≈ ${r0(Math.max(0, budgetLeft()) * famK() / 10) * 10} ₽` : ''}`}</p>
-   <div class="field col"><em>Время готовки · можно несколько</em><div class="secgrid">${SECTIONS.map(([t], i) => `<button class="secbtn${c.sections.includes(i) ? ' on' : ''}" data-sec="${i}" aria-pressed="${c.sections.includes(i)}" aria-label="${t}, ${SEC_TIME[i][1]}"><b>${SEC_TIME[i][0]}</b><small>${SEC_TIME[i][1]}</small></button>`).join('')}</div><small class="secnote">${c.sections.length ? c.sections.slice().sort().map(i => SECTIONS[i][0]).join(' · ') : 'Выберите хотя бы одно'}</small></div>
-  </div>
-  <div class="panel gap">
-   <div class="field col"><em>Желаемое блюдо</em>
-     <div class="wishrow"><input id="c-wish" placeholder="Борщ, плов…" enterkeyhint="done" aria-label="Название блюда"><select id="c-wish-slot" aria-label="Приём пищи">${[...new Set(pat.map(m => m[0]))].map(t => `<option value="${t}">${pat.find(m => m[0] === t)[1].replace(/ \d$/, '')}</option>`).join('')}</select><button class="addbtn" id="c-wish-add" aria-label="Поставить в рацион">${ic('plus')}</button></div>
-     ${wishes.length ? `<div class="chips">${wishes.map(s => `<span class="chip">${esc(s.dish.name)}</span>`).join('')}</div>` : ''}
-     <small>Встанет на ближайший свободный день. Если такого блюда в базе пока нет, предложим похожее по названию.</small></div>
-   <div class="field switch">${ic('shop')}<span><em>Есть продукты дома</em><small>Блюда из них — в ближайшие дни, в покупках их не будет</small></span><button class="tog${c.homeOn ? ' on' : ''}" id="c-home-tog" role="switch" aria-checked="${c.homeOn}" aria-label="Есть продукты дома"><i></i></button></div>
-   ${c.homeOn ? `<div class="field col"><div class="chipin"><input id="c-home" placeholder="Например, гречка" enterkeyhint="done"><button class="btn ghost sm" id="c-home-add">Добавить</button></div>${chipsList(c.home, 'rmhome')}</div>` : ''}
-   <div class="field switch">${ic('dish')}<span><em>Готовить на 2 дня</em><small>Обед и ужин — одной готовкой</small></span><button class="tog${c.cook2 ? ' on' : ''}" id="c-cook2" role="switch" aria-checked="${c.cook2}" aria-label="Готовить на 2 дня"><i></i></button></div>
-   <div class="field switch">${ic('leaf')}<span><em>Другие кухни</em><small>Новые блюда — из кухонь, которые вы выбираете реже</small></span><button class="tog${c.otherCuisines ? ' on' : ''}" id="c-other" role="switch" aria-checked="${!!c.otherCuisines}" aria-label="Другие кухни"><i></i></button></div>
-  </div>
-  ${sys}
-  ${S.plan ? '<button class="btn ghost wide reset" id="c-reset">Начать рацион заново</button>' : ''}
-  <div class="cta"><button class="btn primary wide big" id="c-go"${med ? ' disabled' : ''}>${ic('collect')}<span>${started ? 'Продолжить сбор' : 'Собрать рацион'}</span></button></div>`;
-  const bindList = (inp, btn, arr) => { const add = () => { const x = $(inp).value.trim(); if (!x) return; arr.push(x); save(); render(); }; $(btn).onclick = add; $(inp).onkeydown = e => { if (e.key === 'Enter') add(); }; };
-  $('#c-home-tog').onclick = () => { c.homeOn = !c.homeOn; save(); render(); };
-  if (c.homeOn) { bindList('#c-home', '#c-home-add', c.home); document.querySelectorAll('[data-rmhome]').forEach(b => b.onclick = () => { c.home.splice(+b.dataset.rmhome, 1); save(); render(); }); }
-  document.querySelectorAll('[data-sec]').forEach(b => b.onclick = () => { const i = +b.dataset.sec, a = c.sections;
-    if (a.includes(i)) { if (a.length === 1) { toast('Нужна хотя бы одна сложность'); return; } a.splice(a.indexOf(i), 1); } else a.push(i);
-    a.sort(); save(); render(); });
-  $('#c-budget').onchange = e => { c.budget = +e.target.value || 0; save(); render(); };
-  $('#c-cook2').onclick = () => { c.cook2 = !c.cook2; save(); render(); };
-  $('#c-other').onclick = () => { c.otherCuisines = !c.otherCuisines; save(); render(); };
-  const wish = () => addDesired($('#c-wish').value.trim(), $('#c-wish-slot').value);
+  const wishes = allSlots().filter(sl => sl.fromDesired && !sl.leftover);
+  const selectedDates = S.ui.wishDates || [];
+  const mealOptions = [...new Set(pat.map(m => m[0]))].map(t => `<option value="${t}"${S.ui.wishType === t ? ' selected' : ''}>${pat.find(m => m[0] === t)[1]}</option>`).join('');
+  const cooking = pat.map((m, slot) => `<div class="meal-difficulty"><span class="meal-difficulty-title">${m[1]}${m[0] === 's' && pat.filter(x => x[0] === 's').length > 1 ? ' ' + (pat.slice(0, slot + 1).filter(x => x[0] === 's').length) : ''}</span><div class="secgrid">${SECTIONS.map(([title], i) => `<button class="secbtn${secs(slot).includes(i) ? ' on' : ''}" data-slot="${slot}" data-sec="${i}" aria-pressed="${secs(slot).includes(i)}" aria-label="${m[1]}: ${title}"><b>${SEC_TIME[i][0]}</b><small>${SEC_TIME[i][1]}</small></button>`).join('')}</div></div>`).join('');
+  const dates = Array.from({length: len}, (_, i) => { const date = addDays(start, i), dt = new Date(date + 'T12:00:00'); return `<button class="wish-day${selectedDates.includes(date) ? ' on' : ''}" data-wish-date="${date}" aria-pressed="${selectedDates.includes(date)}"${date < iso(new Date()) ? ' disabled' : ''}><span>${DOW[dt.getDay()]}</span><b>${dt.getDate()}</b><small>${MON[dt.getMonth()]}</small></button>`; }).join('');
+  $('#view').innerHTML = `${appbar('Сбор рациона', len + ' дней с сегодняшнего')}
+    ${med ? '<div class="warn box">Отмечено состояние здоровья, при котором автоматический рацион не подходит. Составьте питание вместе с врачом.</div>' : ''}
+    <div class="panel collect-main"><label class="field"><span><em>Бюджет семьи на ${len} дней, ₽</em><input id="c-budget" type="number" inputmode="numeric" min="0" step="100" value="${c.budget}"></span></label>
+    <p class="budgetnote${lowBudget() ? ' low' : ''}">${lowBudget() ? 'Бюджет ниже ориентира полноценного рациона. Подберём самые экономные блюда.' : `≈ ${r0(baseBudget() / len * 7 / 10) * 10} ₽ в неделю на взрослого`}</p>
+    <div class="cooking-head"><h3>Время готовки</h3><span>Для каждого приёма · можно несколько</span></div>${cooking}</div>
+    <div class="collect-actions"><button class="btn primary wide big" id="c-auto"${med || busy ? ' disabled' : ''}>${ic('analytics')}<span>Собрать рацион автоматически</span></button>
+    <button class="btn ghost wide" id="c-go"${med || busy ? ' disabled' : ''}>${ic('collect')}<span>${started ? 'Продолжить сбор' : 'Собрать рацион'}</span></button></div>
+    ${busy ? `<div class="auto-progress" role="status" aria-live="polite">${esc(S.ui.autoProgress || 'Подбираем блюда…')}<button class="linkbtn" id="c-auto-stop">Остановить</button></div>` : ''}
+    ${S.ui.autoResult ? `<p class="hint auto-result" role="status">${esc(S.ui.autoResult)}</p>` : ''}
+    <div class="panel gap wish-panel"><h3>Желаемое блюдо</h3><div class="wish-compose"><div class="wish-fields"><label class="wish-name-label">Название<input id="c-wish" placeholder="Борщ, плов…" value="${esc(S.ui.wishName || '')}" enterkeyhint="done" aria-label="Название блюда"></label><label>Приём пищи<select id="c-wish-slot">${mealOptions}</select></label></div>
+    <div class="wish-buttons"><button class="addbtn wish-favorite" id="c-wish-fav" aria-label="Избранные блюда">${ic('heart')}</button><button class="addbtn" id="c-wish-add" aria-label="Добавить блюдо на выбранные даты">${ic('plus')}</button></div></div>
+    <div class="wish-calendar-head"><span>Даты · можно несколько</span><button class="linkbtn" id="wish-clear">Ближайший день</button></div><div class="wish-calendar" aria-label="Даты желаемого блюда">${dates}</div>
+    <p class="hint wish-help">${selectedDates.length ? 'Выбрано дат: ' + selectedDates.length + '. Блюдо встанет в свободный приём каждой даты.' : 'Без выбранных дат — ближайший свободный приём.'}</p>
+    ${wishes.length ? `<div class="chips">${[...new Set(wishes.map(x => x.dish.name))].map(n => `<span class="chip">${esc(n)}</span>`).join('')}</div>` : ''}</div>
+    <div class="panel gap"><div class="field switch">${ic('shop')}<span><em>Есть продукты дома</em><small>Блюда из них — в ближайшие дни</small></span><button class="tog${c.homeOn ? ' on' : ''}" id="c-home-tog" role="switch" aria-checked="${c.homeOn}" aria-label="Есть продукты дома"><i></i></button></div>
+    ${c.homeOn ? `<div class="field col"><div class="chipin"><input id="c-home" placeholder="Например, гречка"><button class="btn ghost sm" id="c-home-add">Добавить</button></div><div class="chips">${c.home.map((n, i) => `<button class="chip x" data-rmhome="${i}">${esc(n)}</button>`).join('')}</div></div>` : ''}
+    <div class="field switch">${ic('dish')}<span><em>Готовить на 2 дня</em><small>Обед и ужин — одной готовкой</small></span><button class="tog${c.cook2 ? ' on' : ''}" id="c-cook2" role="switch" aria-checked="${c.cook2}" aria-label="Готовить на 2 дня"><i></i></button></div>
+    <div class="field switch">${ic('leaf')}<span><em>Другие кухни</em><small>Новые блюда — из кухонь, которые вы выбираете реже</small></span><button class="tog${c.otherCuisines ? ' on' : ''}" id="c-other" role="switch" aria-checked="${!!c.otherCuisines}" aria-label="Другие кухни"><i></i></button></div></div>`;
+  const v = $('#view');
+  if (busy) { v.querySelectorAll('input, select, button').forEach(b => b.disabled = b.id !== 'c-auto-stop'); $('#c-auto-stop').onclick = () => { autoRun.cancelled = true; $('#c-auto-stop').disabled = true; }; return; }
+  v.querySelectorAll('[data-sec]').forEach(b => b.onclick = () => { const slot = +b.dataset.slot, sec = +b.dataset.sec, arr = secs(slot);
+    if (arr.includes(sec)) { if (arr.length === 1) return toast('Оставьте хотя бы одно время готовки'); arr.splice(arr.indexOf(sec), 1); } else arr.push(sec);
+    c.sectionsBySlot[pat.length + ':' + slot] = arr.sort(); save(); render(); });
+  $('#c-budget').onchange = e => { c.budget = Math.max(0, +e.target.value || 0); save(); render(); };
+  $('#c-wish').oninput = e => { S.ui.wishName = e.target.value; };
+  $('#c-wish-slot').onchange = e => { S.ui.wishType = e.target.value; save(); };
+  v.querySelectorAll('[data-wish-date]').forEach(b => b.onclick = () => { const date = b.dataset.wishDate; S.ui.wishDates = selectedDates.includes(date) ? selectedDates.filter(x => x !== date) : [...selectedDates, date].sort(); save(); render(); });
+  $('#wish-clear').onclick = () => { S.ui.wishDates = []; save(); render(); };
+  const wish = () => addDesired($('#c-wish').value.trim(), $('#c-wish-slot').value, S.ui.wishDates || []);
   $('#c-wish-add').onclick = wish; $('#c-wish').onkeydown = e => { if (e.key === 'Enter') wish(); };
-  $('#c-go').onclick = startCollect;
-  const rs = $('#c-reset'); if (rs) rs.onclick = () => sheet(`<h3>Начать рацион заново?</h3><p>Все выбранные блюда на эти дни будут удалены. Ваши круги блюд сохранятся.</p><div class="actions two"><button class="btn ghost" id="rs-no">Отмена</button><button class="btn primary" id="rs-yes">Удалить и начать</button></div>`, b => { $('#rs-no', b).onclick = closeSheet; $('#rs-yes', b).onclick = () => { S.plan = null; S.feed = null; save(); closeSheet(); render(); }; });
+  $('#c-wish-fav').onclick = wishFavorites;
+  $('#c-go').onclick = startCollect; $('#c-auto').onclick = autoCollect;
+  $('#c-home-tog').onclick = () => { c.homeOn = !c.homeOn; save(); render(); };
+  if (c.homeOn) { const add = () => { const n = $('#c-home').value.trim(); if (n && !c.home.includes(n)) c.home.push(n); save(); render(); }; $('#c-home-add').onclick = add; $('#c-home').onkeydown = e => { if (e.key === 'Enter') add(); }; v.querySelectorAll('[data-rmhome]').forEach(b => b.onclick = () => { c.home.splice(+b.dataset.rmhome, 1); save(); render(); }); }
+  $('#c-cook2').onclick = () => { c.cook2 = !c.cook2; save(); render(); }; $('#c-other').onclick = () => { c.otherCuisines = !c.otherCuisines; save(); render(); };
+}
+function wishFavorites() {
+  const ids = new Set(Object.values(S.lib).flatMap(sys => Object.values(sys).flatMap(l => [...l.main, ...l.sec])));
+  const past = (S.lastWeek?.days || []).flatMap(d => d.slots).filter(Boolean);
+  [...allSlots(), ...past].forEach(sl => { rememberDish(sl.dish); ids.add(sl.dish.id); });
+  Object.values(S.dishStore).filter(d => S.marks.like.includes(d.name)).forEach(d => ids.add(d.id));
+  const list = [...ids].map(getDish).filter(d => d && !isBanned(d) && allowedByDiet(d)).sort((a, b) => Number(S.marks.like.includes(b.name)) - Number(S.marks.like.includes(a.name)) || a.name.localeCompare(b.name, 'ru'));
+  sheet(`<p class="eyebrow">Избранное и выбранное ранее</p><h3>Ваши блюда</h3>${list.length ? '<label class="sublabel">Поиск<input id="fav-search" placeholder="Название блюда"></label><div class="pick" id="fav-list"></div>' : '<p class="hint">Пока здесь пусто. Выбранные блюда и ваши любимые появятся в этом списке.</p>'}`, b => {
+    if (!list.length) return;
+    const paint = () => { const q = $('#fav-search', b).value.toLowerCase().trim(), matches = list.filter(d => d.name.toLowerCase().includes(q)); $('#fav-list', b).innerHTML = matches.map(d => `<button class="pickrow" data-fav="${esc(d.id)}"><b>${S.marks.like.includes(d.name) ? '♥ ' : ''}${esc(d.name)}</b><span>${d.time} мин</span></button>`).join('') || '<p class="hint">Ничего не найдено</p>';
+      b.querySelectorAll('[data-fav]').forEach(x => x.onclick = () => { const d = getDish(x.dataset.fav); S.ui.wishName = d.name; S.ui.wishDishId = d.id; if (!d.types.includes(S.ui.wishType || 'b')) S.ui.wishType = pattern().find(m => d.types.includes(m[0]))?.[0] || pattern()[0][0]; save(); closeSheet(); render(); }); };
+    $('#fav-search', b).oninput = paint; paint();
+  });
+}
+function autoTastePenalty(d) {
+  const scores = S.taste.profile?.scores || {}, levels = S.taste.pendingLvl || S.taste.lvl;
+  const ids = [...new Set(d.ing.filter(i => i.g >= 20).map(i => i.id))];
+  const ingredients = ids.reduce((v, id) => v + (scores['p:' + id] || scores['g:' + id] || 0), 0) / Math.max(1, ids.length);
+  const cuisine = scores['c:' + d.cuisineTag] || 0;
+  const level = Array.isArray(levels) && d.lvl != null ? (levels[d.lvl] || 0) / 100 : 0;
+  return -.45 * ingredients - .25 * cuisine + (S.collect.otherCuisines ? (myCuisine(d) ? .5 : -.25) : -.3 * level);
+}
+async function autoCollect() {
+  if (autoRun || autoCollect.pending || Object.values(S.settings.medical).some(Boolean)) return;
+  if (!S.plan) newPlan();
+  if (!firstEmpty()) { S.ui.tab = 'plan'; save(); render(); return toast('Рацион уже собран'); }
+  const requestedPlan = S.plan;
+  if (Server.on()) {
+    autoCollect.pending = true;
+    try { await checkKey(true); } catch (e) { return accessSheet(e.code, autoCollect, e.message); }
+    finally { autoCollect.pending = false; }
+  }
+  if (S.plan !== requestedPlan || S.feed?.active) return toast('Рацион изменился. Запустите автосбор ещё раз.');
+  const job = autoRun = {cancelled: false}, plan = S.plan;
+  S.firstCollect = S.firstCollect || iso(new Date()); S.feed = null; S.ui.autoResult = null;
+  let added = 0, failure = '';
+  try {
+    S.ui.autoProgress = 'Загружаем подходящие блюда…'; render(); await poolFill();
+    if (S.collect.homeOn && S.collect.home.length && Server.on() && !job.cancelled) {
+      for (const slot of pattern().map((_, i) => i).filter(i => 'ld'.includes(pattern()[i][0]))) {
+        try { await fetchDishes({day: 0, slot, seen: new Set()}, {home: S.collect.home, count: 3}); }
+        catch (e) { if (KEY_ERRORS.includes(e.code)) throw e; }
+      }
+    }
+    for (let day = 0; day < plan.len && !job.cancelled && S.plan === plan; day++) for (let slot = 0; slot < plan.meals && !job.cancelled; slot++) {
+      if (plan.days[day].slots[slot]) continue;
+      S.ui.autoProgress = `День ${day + 1} из ${plan.len} · ${pattern()[slot][1]}`; render();
+      const ctx = {day, slot, type: pattern()[slot][0], tg: slotTarget(day, slot), seen: new Set()};
+      const choose = () => {
+        const all = [...Object.values(DBMAP), ...Object.values(S.dishStore)];
+        for (const relaxed of [false, true, 'repeat']) {
+          const list = all.filter(d => !isBanned(d) && !(S.cool[d.id] > Date.now()) && fitsSlot(d, ctx, relaxed));
+          if (list.length) {
+            const score = d => scoreDish(d, ctx.tg) + autoTastePenalty(d) + budgetPenalty(d, slot) + homeBonus(d, day);
+            const rated = list.map(d => [d, score(d)]).sort((a, b) => a[1] - b[1]).map(x => x[0]);
+            const diverse = rated.filter(d => varietyOk(d, day, slot)); return diverse[0] || rated[0];
+          }
+        }
+        return null;
+      };
+      let dish = choose();
+      if (!dish && Server.on()) { await serverNew(ctx); dish = choose(); }
+      if (job.cancelled || S.plan !== plan) break;
+      if (!dish) continue;
+      if (!safePlace(day, slot, dish, {automatic: true}).ok) continue;
+      libTake(dish, ctx.type); feedback(dish, 'take'); if (!S.seenEver.includes(dish.id)) S.seenEver.push(dish.id);
+      const P = S.pool; if (P) Object.keys(P.q).forEach(t => P.q[t] = P.q[t].filter(id => id !== dish.id));
+      if (S.collect.cook2 && 'ld'.includes(ctx.type) && day + 1 < plan.len && !plan.days[day + 1].slots[slot]) safePlace(day + 1, slot, dish, {leftover: true, automatic: true});
+      added++; save(); await sleep(0);
+    }
+  } catch (e) { failure = e.message || 'Сбор прерван. Уже выбранные блюда сохранены.'; }
+  finally {
+    autoRun = null; delete S.ui.autoProgress;
+    const empty = plan.days.reduce((n, d) => n + d.slots.filter(x => !x).length, 0);
+    S.ui.autoResult = failure || (job.cancelled ? 'Сбор остановлен. Выбранные блюда сохранены.' : empty ? `Добавлено блюд: ${added}. Осталось приёмов: ${empty}. Подходящих вариантов в выбранных условиях не хватило — их можно подобрать вручную.` : 'Рацион собран автоматически. Любое блюдо можно заменить.');
+    if (!empty) S.ui.tab = 'plan'; save(); render(); toast(empty ? S.ui.autoResult : 'Рацион собран автоматически');
+  }
 }
 function libSummary() {
   const pat = pattern(), types = [...new Set(pat.map(m => m[0]))], names = {b: 'Завтраки', l: 'Обеды', d: 'Ужины', s: 'Перекусы'};
   return `<details class="panel libsum"><summary>Ваши круги · ${secLabel()}</summary><ul class="ing">${types.map(t => `<li><span>${names[t]}</span><b>${libMerged(t, 'main').length} из ${capacity(t)} · вторичный ${libMerged(t, 'sec').length}</b></li>`).join('')}</ul><p class="hint">Основной круг — блюда за 4 недели. Отказ переносит блюдо во вторичный круг, второй отказ удаляет навсегда.</p></details>`;
 }
-async function addDesired(name, type) {
-  if (!name) { toast('Впишите название блюда'); return; }
+async function addDesired(name, type, dates = []) {
+  if (addDesired.busy || autoRun) return;
+  if (Object.values(S.settings.medical).some(Boolean)) return toast('Автоматический подбор отключён в настройках здоровья');
+  if (!name) return toast('Впишите название блюда');
   if (!S.plan) newPlan();
-  const pat = pattern(), from = Math.max(0, Math.min(todayIdx(), S.plan.len - 1)); let day = -1, slot = -1;
-  for (let k = 0; k < S.plan.len && day < 0; k++) { const dd = (from + k) % S.plan.len; const i = pat.findIndex((m, j) => m[0] === type && !S.plan.days[dd].slots[j]); if (i >= 0) { day = dd; slot = i; } }
-  if (day < 0) { toast('Все приёмы этого типа уже заняты — замените блюдо в разделе «Рацион»'); return; }
-  const ctx = {day, slot, type: pattern()[slot][0], tg: slotTarget(day, slot), seen: new Set()};
-  const q = nameKey(name);
-  let d = null;
-  if (Server.on()) {
-    toast('Ищу блюдо…');
-    try { d = (await fetchDishes(ctx, {wish: name, count: 1}))[0] || null; } catch (e) { toast(e.message); if (KEY_ERRORS.includes(e.code)) accessSheet(e.code, () => addDesired(name, type)); return; }
-  } else d = Object.values(DBMAP).find(x => nameKey(x.name).includes(q) && allowedByDiet(x) && !isBanned(x));
-  if (!d) { toast(Server.on() ? 'Не удалось подобрать такое блюдо.' : 'Такого блюда нет во встроенной базе. Новые блюда — с сервером и ключом доступа.'); return; }
-  if (!allowedByDiet(d)) { toast('В блюде есть то, что в семье исключено'); return; }
-  const sf = safePlace(day, slot, d, {fromDesired: true});
-  if (!sf.ok) { toast(`«${d.name}» не подходит для этого дня — выберите другое`); return; }
-  libTake(d, ctx.type); S.seenEver.push(d.id); save(); render();
-  const dt = new Date(addDays(S.plan.start, day) + 'T12:00:00'), when = `${DOW[dt.getDay()]}, ${dt.getDate()} ${MON[dt.getMonth()]}`;
-  toast(healthOk(d, slot, ctx.tg) ? `«${d.name}» — ${when}` : `«${d.name}» — ${when}. Блюдо выше нормы приёма, остальные приёмы дня подстроятся.`);
+  const plan = S.plan, pat = pattern(), today = iso(new Date()), requested = [...new Set(dates)].sort();
+  const find = day => { const slot = pat.findIndex((m, j) => m[0] === type && !plan.days[day].slots[j]); return slot >= 0 ? {day, slot} : null; };
+  let targets = requested.map(date => { const day = Math.round((new Date(date + 'T12:00:00') - new Date(plan.start + 'T12:00:00')) / 864e5); return date >= today && day >= 0 && day < plan.len ? find(day) : null; }).filter(Boolean);
+  if (!requested.length) { for (let day = Math.max(0, todayIdx()); day < plan.len; day++) { const target = find(day); if (target) { targets = [target]; break; } } }
+  if (!targets.length) return toast('На выбранные даты нет свободного приёма этого типа. Замените блюдо в «Рационе».');
+  addDesired.busy = true;
+  const buttons = ['#c-wish-add', '#c-wish-fav', '#c-auto', '#c-go']; buttons.forEach(q => { const el = $(q); if (el) el.disabled = true; });
+  let added = 0, lastError = '';
+  try {
+    const saved = S.ui.wishDishId && getDish(S.ui.wishDishId), favorite = saved && nameKey(saved.name) === nameKey(name) ? saved : null;
+    for (const {day, slot} of targets) {
+      if (S.plan !== plan) break;
+      const ctx = {day, slot, type, tg: slotTarget(day, slot), seen: new Set()};
+      let d = favorite;
+      if (!d && Server.on()) { toast('Ищу блюдо…'); try { d = (await fetchDishes(ctx, {wish: name, count: 1}))[0]; } catch (e) { lastError = e.message; if (KEY_ERRORS.includes(e.code)) { accessSheet(e.code, () => addDesired(name, type, dates)); break; } continue; } }
+      if (!d && !Server.on()) d = [...Object.values(DBMAP), ...Object.values(S.dishStore)].find(x => nameKey(x.name).includes(nameKey(name)));
+      if (S.plan !== plan) break;
+      if (!d || !d.types.includes(type) || isBanned(d) || !allowedByDiet(d) || !secs(slot).includes(sectionOf(d))) { lastError = 'Блюдо не подходит под выбранный приём, время готовки или исключения.'; continue; }
+      if (!safePlace(day, slot, d, {fromDesired: true}).ok) { lastError = 'Блюдо не подходит по ограничениям этого дня.'; continue; }
+      libTake(d, type); feedback(d, 'take'); if (!S.seenEver.includes(d.id)) S.seenEver.push(d.id); added++; save();
+    }
+  } finally { addDesired.busy = false; save(); render(); }
+  const omitted = (requested.length || 1) - added;
+  toast(added ? `«${name}»: добавлено на ${added} ${ruDays(added)}${omitted ? '. Не все выбранные даты доступны.' : ''}` : lastError || 'Такого блюда пока нет в базе.');
 }
 async function startCollect() {
+  if (autoRun || Object.values(S.settings.medical).some(Boolean)) return;
   if (!S.plan) newPlan();
   const first = firstEmpty();
   if (!first) { S.ui.tab = 'plan'; save(); render(); toast('Рацион уже собран. Заменить блюдо можно в разделе «Рацион».'); return; }
@@ -1120,6 +1282,7 @@ function firstEmpty(fromDay = 0) {
 }
 const CARD_LIMIT = 15;
 async function startFeed(day, slot, manual) {
+  if (autoRun || Object.values(S.settings.medical).some(Boolean)) return;
   S.feed = Object.assign({v4: true, seen: {}, used: {}, counter: 0, homeQueue: []}, S.feed && S.feed.v4 ? S.feed : {}, {active: true, day, slot, manual, card: null, peek: null, loading: false, exhausted: false, aiWarned: false});
   poolFill();
   if (S.collect.homeOn && S.collect.home.length && Server.on() && S.plan.homeFor !== S.collect.home.join('|')) {
@@ -1291,7 +1454,7 @@ function markSheet() {
 
 /* ---------- Продукты ---------- */
 function roundAmt(i, g) {
-  if (i.unit === 'pcs') { const n = Math.ceil(g / 55); return {q: n, t: n + ' шт', g: n * 55}; }
+  if (i.unit === 'pcs') { const weight = i.pcs_g || 55, n = Math.ceil(g / weight); return {q: n, t: n + ' шт', g: n * weight}; }
   const u = i.unit === 'ml' ? ['мл', 'л'] : ['г', 'кг'];
   let q;
   if (g < 300) q = Math.ceil(g / 50) * 50;
@@ -1396,7 +1559,7 @@ function viewSettings() {
     v.innerHTML = `${appbar('Настройки', 'Профиль и приложение', {back: true})}
     <button class="profile" data-person="${me.id}"><span class="mono">${esc(me.name.slice(0, 1).toUpperCase())}</span><span><b>${esc(me.name)}</b><small>${r0(t.E)} ккал · белок ${r0(t.P)} г в день</small></span>${ic('chev', 'sm')}</button>
     <nav class="rows">${SET_PAGES.map(([k, t, s]) => `<button class="row" data-set="${k}"><span class="medal">${ic(SET_IC[k])}</span><span><b>${t}</b><small>${s}</small></span>${ic('chev', 'sm')}</button>`).join('')}</nav>
-    <p class="hint center">Мой рацион · версия 0.9.9</p>`;
+    <p class="hint center">Мой рацион · версия 0.10.0</p>`;
     v.querySelectorAll('[data-set]').forEach(b => b.onclick = () => { S.ui.set = b.dataset.set; save(); render(); });
     v.querySelector('[data-person]').onclick = () => editPerson(me);
     return;
@@ -1707,9 +1870,10 @@ function historyHtml() {
 }
 
 /* ---------- Запуск ---------- */
-$('#nav div').innerHTML = [['plan','Рацион'],['shop','Продукты'],['collect','Сбор']].map(([k, t]) => `<button class="tab" data-tab="${k}"><span class="tab-ic">${ic(k)}</span>${t}</button>`).join('');
+$('#nav div').innerHTML = [['plan','Рацион'],['stream','Лента'],['shop','Продукты'],['analytics','Аналитика'],['collect','Сбор']].map(([k, t]) => `<button class="tab" data-tab="${k}"><span class="tab-ic">${ic(k)}</span>${t}</button>`).join('');
 document.querySelectorAll('.tab').forEach(b => b.onclick = () => { S.ui.tab = b.dataset.tab; S.ui.set = null; save(); render(); });
 document.addEventListener('click', e => {
+  if (autoRun && (e.target.closest('[data-gear]') || e.target.closest('[data-back]'))) return;
   if (e.target.closest('[data-gear]')) { S.ui.prevTab = S.ui.tab; S.ui.tab = 'settings'; S.ui.set = null; save(); render(); }
   else if (e.target.closest('[data-back]')) { if (S.ui.set) S.ui.set = null; else S.ui.tab = S.ui.prevTab || 'plan'; save(); render(); }
 });
