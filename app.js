@@ -63,8 +63,9 @@ const defaults = () => ({
   people: [],
   settings: {meals: 4, mealsAuto: false, planLen: 7, norms: 'NASEM', diet: 'all', forbidden: [], allergens: [], medical: {}, accessKey: '', serverUrl: DEFAULT_SERVER, botUrl: ''},
   marks: {like: [], notes: {}, recent: {}},
-  collect: {budget: 6000, sections: [0, 1], sectionsBySlot: {}, homeOn: false, home: [], cook2: false, otherCuisines: false},
+  collect: {budget: 6000, sections: [0, 1], sectionsBySlot: {}, homeOn: true, home: [], cook2: false, otherCuisines: false},
   analytics: {v: 1, days: {}},
+  fridge: {v:2,items:[],packs:{},receipts:[],revision:0},
   lib: {}, banned: {ids: [], names: []}, cool: {}, seenEver: [], dishStore: {}, imports: [], taste: {w: {}, mode: 'self', done: false}, aiTimes: [], firstCollect: null,
   plan: null, feed: null, lastWeek: null, access: null, fbq: [], apiLog: null, pricesAt: 0, pool: null,
   shop: {checked: {}, group: false, range: 'all', bought: {}, lastBought: null},
@@ -83,6 +84,9 @@ try { S = Object.assign(defaults(), JSON.parse(localStorage.getItem(KEY) || '{}'
   S.analytics = S.analytics && S.analytics.v === 1 ? S.analytics : {v: 1, days: {}};
   S.analytics.days = S.analytics.days || {};
   S.collect.sectionsBySlot = S.collect.sectionsBySlot || {};
+  let savedFridge; try { savedFridge=JSON.parse(localStorage.getItem(KEY) || '{}').fridge; } catch {}
+  if (savedFridge?.v !== 2) S.collect.homeOn = true;
+  S.fridge=RacionPantry.create(savedFridge,S.collect.home || [],Object.values(ING));
   S.ui.wishDates = [];
   delete S.ui.autoProgress;
   if (!S.srvDefault) { if (!S.settings.serverUrl) S.settings.serverUrl = DEFAULT_SERVER; S.srvDefault = 1; } // 0.8.4: адрес сервера по умолчанию (один раз)
@@ -446,11 +450,9 @@ function softOk(d, day, slot) { // белок ≤ 2,0 г/кг в день, кл�
   const p = mainEater(), t = personTargets(p), u = eaterDay(day, slot), x = eaterIntake(d, slot);
   return u.p + x.p <= 2.0 * p.weight + 1e-6 && u.fib + x.fib <= 1.5 * t.fib + 1e-6;
 }
-function homeBonus(d, day) {
-  if (!S.collect.homeOn || !S.collect.home.length || day > 1) return 0;
-  const h = S.collect.home.map(x => x.toLowerCase());
-  return d.ing.some(i => h.some(x => i.name.toLowerCase().includes(x) || x.includes(i.name.toLowerCase()))) ? -0.4 : 0;
-}
+function homeNames() { return S.collect.homeOn ? RacionPantry.names(S.fridge) : []; }
+function syncFridgeHome() { S.collect.home = RacionPantry.names(S.fridge); }
+function homeBonus(d, day) { return S.collect.homeOn ? -.75 * RacionPantry.coverage(S.fridge, d) : 0; }
 const rank = (list, ctx) => list.map(d => [d, scoreDish(d, ctx.tg) + budgetPenalty(d, ctx.slot) + homeBonus(d, ctx.day) + (varietyOk(d, ctx.day, ctx.slot) ? 0 : 0.5)]).sort((a, b) => a[1] - b[1]).map(x => x[0]);
 function pickCircle(which, ctx) { // сначала блюда без повтора основы дня, потом любые
   const ids = libMerged(ctx.type, which, ctx.slot);
@@ -609,7 +611,7 @@ const MICRO_KEYS = ['vc', 'va', 'ca', 'fe', 'mg', 'k', 'b12', 'd', 'fol', 'n3', 
 function fromApi(o) { // блюдо API.md §4 → внутренний формат (хранится в кэше целиком)
   if (!o || !o.id || !o.name || !Array.isArray(o.ing) || !o.ing.length) throw new ApiError('bad_request', 'Неполное блюдо от сервера');
   return {id: String(o.id), num: o.num, section: o.section, cuisine: LEVELS[o.cuisine] || '', lvl: o.cuisine, name: String(o.name), types: o.types || '', time: +o.time || 30, diff: +o.diff || 3, salt: +o.salt || 0,
-    tips: o.tips || '', servings: o.servings, cuisineTag: o.cuisine_tag, nutr: o.nutr || null, strengths: o.strengths || [], steps: (o.steps || []).map(String), allergens: o.allergens || [], flags: o.flags || '', cost: o.base ? +o.base.cost : undefined, pclass: o.pclass, base: o.base, src: 'server', priceAt: Date.now(), rare: !!o.rare, risk: Array.isArray(o.risk) ? o.risk : [],
+    imageUrl: safeDishImage(o.image_url || o.photo_url || o.image?.url || o.image), tips: o.tips || '', servings: o.servings, cuisineTag: o.cuisine_tag, nutr: o.nutr || null, strengths: o.strengths || [], steps: (o.steps || []).map(String), allergens: o.allergens || [], flags: o.flags || '', cost: o.base ? +o.base.cost : undefined, pclass: o.pclass, base: o.base, src: 'server', priceAt: Date.now(), rare: !!o.rare, risk: Array.isArray(o.risk) ? o.risk : [],
     ing: o.ing.map(x => { const m = Array.isArray(x.micro) ? x.micro : []; const r = {id: x.id, name: x.name, cat: x.cat, nutrients: x.nutrients || null, role: x.role || '', prep: x.prep || '', unit: x.unit || 'g', pcs_g: x.pcs_g, price: +x.price || 0, kcal: +x.kcal || 0, p: +x.p || 0, f: +x.f || 0, c: +x.c || 0, fib: +x.fib || 0, flags: x.flags || '', allergens: x.allergens || [], g: +x.g || 0, rare: +x.rare || 0};
       MICRO_KEYS.forEach((k, i) => r[k] = +m[i] || 0); return r; })};
 }
@@ -789,27 +791,8 @@ function applyTheme() {
   const meta = $('meta[name="theme-color"]');
   if (meta) meta.content = getComputedStyle(r).getPropertyValue('--bg').trim();
 }
-const IC = {
-  fridge: '<rect x="5" y="3" width="14" height="18" rx="2.5" fill="currentColor" fill-opacity=".14"/><path d="M5 10h14M8 6v1.5M8 13v3M8 21v1M16 21v1"/>',
-  stream: '<rect x="4" y="3" width="16" height="18" rx="3"/><path d="M8 8h8M8 12h8M8 16h5"/>',
-  analytics: '<path d="M4 19.5h16M7 16V11M12 16V5M17 16V8"/>',
-  plus: '<path d="M12 5v14M5 12h14"/>', down: '<path d="M6 9.5l6 6 6-6"/>',
- plan: '<rect x="3.5" y="5" width="17" height="15.5" rx="3.5" fill="currentColor" fill-opacity=".14"/><path d="M3.5 10h17M8 3v4M16 3v4M8.5 14.5h3M8.5 17h6"/>',
- shop: '<path d="M5 8.5h14l-1.2 10.2a2 2 0 0 1-2 1.8H8.2a2 2 0 0 1-2-1.8z" fill="currentColor" fill-opacity=".14"/><path d="M9 10V7a3 3 0 0 1 6 0v3"/>',
- collect: '<rect x="7" y="3.5" width="11" height="15" rx="2.6" fill="currentColor" fill-opacity=".14" transform="rotate(9 12.5 11)"/><rect x="5" y="5" width="11" height="15" rx="2.6"/><path d="M10.5 9.5l.9 1.9 1.9.9-1.9.9-.9 1.9-.9-1.9-1.9-.9 1.9-.9z"/>',
- gear: '<path d="M12 2.8l1.6 2.3 2.7-.6.6 2.7 2.3 1.6-1.3 2.4 1.3 2.4-2.3 1.6-.6 2.7-2.7-.6L12 21.2l-1.6-2.3-2.7.6-.6-2.7-2.3-1.6L6.1 12 4.8 9.6l2.3-1.6.6-2.7 2.7.6z" fill="currentColor" fill-opacity=".14"/><circle cx="12" cy="12" r="3.2"/>',
- look: '<path d="M12 3.5a8.5 8.5 0 1 0 0 17c1.2 0 1.8-.8 1.8-1.7 0-1.3-1-1.5-1-2.6 0-1 .8-1.7 1.9-1.7h2.1a3.7 3.7 0 0 0 3.7-3.7C20.5 6.7 16.7 3.5 12 3.5z" fill="currentColor" fill-opacity=".14"/><circle cx="8" cy="10.5" r="1.2"/><circle cx="12" cy="7.5" r="1.2"/><circle cx="16" cy="10" r="1.2"/>',
- family: '<circle cx="9" cy="8.5" r="3.2" fill="currentColor" fill-opacity=".14"/><circle cx="16.5" cy="9.5" r="2.4"/><path d="M3.5 19.5c.6-3.3 2.8-5.2 5.5-5.2s4.9 1.9 5.5 5.2M14.6 14.7a4.6 4.6 0 0 1 1.9-.4c2.2 0 3.7 1.6 4 4.4"/>',
- dish: '<circle cx="12" cy="12" r="8.5" fill="currentColor" fill-opacity=".14"/><circle cx="12" cy="12" r="5"/><path d="M12 9.5v5M9.5 12h5" stroke-opacity=".6"/>',
- heart: '<path d="M12 20s-7.5-4.4-7.5-10A4.3 4.3 0 0 1 12 7.3 4.3 4.3 0 0 1 19.5 10c0 5.6-7.5 10-7.5 10z" fill="currentColor" fill-opacity=".14"/>',
- shield: '<path d="M12 3l7 2.8v5.5c0 4.5-3 7.8-7 9.7-4-1.9-7-5.2-7-9.7V5.8z" fill="currentColor" fill-opacity=".14"/><path d="M12 9v6M9 12h6"/>',
- key: '<circle cx="8" cy="15.5" r="4" fill="currentColor" fill-opacity=".14"/><path d="M11 12.5L19.5 4M16 7.5l2.5 2.5M13.8 9.7l2 2"/>',
- history: '<path d="M4.5 12a7.5 7.5 0 1 0 2.2-5.3L4.5 9"/><path d="M4.5 4.5V9H9M12 8v4.5l3 2"/>',
- data: '<ellipse cx="12" cy="6.5" rx="7" ry="2.8" fill="currentColor" fill-opacity=".14"/><path d="M5 6.5v11c0 1.5 3.1 2.8 7 2.8s7-1.3 7-2.8v-11M5 12c0 1.5 3.1 2.8 7 2.8s7-1.3 7-2.8"/>',
- code: '<rect x="3.5" y="4.5" width="17" height="15" rx="3" fill="currentColor" fill-opacity=".14"/><path d="M9 10l-2.5 2.5L9 15M15 10l2.5 2.5L15 15M12.8 9l-1.6 7"/>',
- chev: '<path d="M9 5l7 7-7 7"/>', back: '<path d="M15 5l-7 7 7 7"/>',
- leaf: '<path d="M5 19c0-8 5-13 14-14-1 9-6 14-14 14z" fill="currentColor" fill-opacity=".14"/><path d="M5 19l8-8"/>'
-};
+/* Lucide SVG subset, ISC/MIT; see site/licenses/lucide.txt. */
+const IC = {"plan":"<path d=\"M8 2v3\" /><path d=\"M16 2v3\" /><rect x=\"3\" y=\"3\" width=\"18\" height=\"18\" rx=\"2\" /><path d=\"M3 9h18\" /><path d=\"M8 13h.01\" /><path d=\"M12 13h.01\" /><path d=\"M16 13h.01\" /><path d=\"M8 17h.01\" /><path d=\"M12 17h.01\" /><path d=\"M16 17h.01\" />","stream":"<path d=\"M15 18h-5\" /><path d=\"M18 14h-8\" /><path d=\"M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-4 0v-9a2 2 0 0 1 2-2h2\" /><rect width=\"8\" height=\"4\" x=\"10\" y=\"6\" rx=\"1\" />","shop":"<path d=\"m15 11-1 9\" /><path d=\"m19 11-4-7\" /><path d=\"M2 11h20\" /><path d=\"m3.5 11 1.6 7.4a2 2 0 0 0 2 1.6h9.8a2 2 0 0 0 2-1.6l1.7-7.4\" /><path d=\"M4.5 15.5h15\" /><path d=\"m5 11 4-7\" /><path d=\"m9 11 1 9\" />","collect":"<path d=\"M13 13.74a2 2 0 0 1-2 0L2.5 8.87a1 1 0 0 1 0-1.74L11 2.26a2 2 0 0 1 2 0l8.5 4.87a1 1 0 0 1 0 1.74z\" /><path d=\"m20 14.285 1.5.845a1 1 0 0 1 0 1.74L13 21.74a2 2 0 0 1-2 0l-8.5-4.87a1 1 0 0 1 0-1.74l1.5-.845\" />","analytics":"<path d=\"M12 16v5\" /><path d=\"M16 14.639V21\" /><path d=\"M20 10.656V21\" /><path d=\"m22 3-8.646 8.646a.5.5 0 0 1-.708 0L9.354 8.354a.5.5 0 0 0-.707 0L2 15\" /><path d=\"M4 18.463V21\" /><path d=\"M8 14.656V21\" />","gear":"<path d=\"M14 17H5\" /><path d=\"M19 7h-9\" /><circle cx=\"17\" cy=\"17\" r=\"3\" /><circle cx=\"7\" cy=\"7\" r=\"3\" />","look":"<path d=\"M12 22a1 1 0 0 1 0-20 10 9 0 0 1 10 9 5 5 0 0 1-5 5h-2.25a1.75 1.75 0 0 0-1.4 2.8l.3.4a1.75 1.75 0 0 1-1.4 2.8z\" /><circle cx=\"13.5\" cy=\"6.5\" r=\".5\" fill=\"currentColor\" /><circle cx=\"17.5\" cy=\"10.5\" r=\".5\" fill=\"currentColor\" /><circle cx=\"6.5\" cy=\"12.5\" r=\".5\" fill=\"currentColor\" /><circle cx=\"8.5\" cy=\"7.5\" r=\".5\" fill=\"currentColor\" />","family":"<path d=\"M18 21a8 8 0 0 0-16 0\" /><circle cx=\"10\" cy=\"8\" r=\"5\" /><path d=\"M22 20c0-3.37-2-6.5-4-8a5 5 0 0 0-.45-8.3\" />","dish":"<path d=\"m16 2-2.3 2.3a3 3 0 0 0 0 4.2l1.8 1.8a3 3 0 0 0 4.2 0L22 8\" /><path d=\"M15 15 3.3 3.3a4.2 4.2 0 0 0 0 6l7.3 7.3c.7.7 2 .7 2.8 0L15 15Zm0 0 7 7\" /><path d=\"m2.1 21.8 6.4-6.3\" /><path d=\"m19 5-7 7\" />","heart":"<path d=\"M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5\" />","shield":"<path d=\"M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z\" /><path d=\"M9 12h6\" /><path d=\"M12 9v6\" />","key":"<path d=\"M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z\" /><circle cx=\"16.5\" cy=\"7.5\" r=\".5\" fill=\"currentColor\" />","history":"<path d=\"M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8\" /><path d=\"M3 3v5h5\" />","data":"<ellipse cx=\"12\" cy=\"5\" rx=\"9\" ry=\"3\" /><path d=\"M3 5V19A9 3 0 0 0 21 19V5\" /><path d=\"M3 12A9 3 0 0 0 21 12\" />","code":"<path d=\"m18 16 4-4-4-4\" /><path d=\"m6 8-4 4 4 4\" /><path d=\"m14.5 4-5 16\" />","chev":"<path d=\"m9 18 6-6-6-6\" />","back":"<path d=\"m15 18-6-6 6-6\" />","leaf":"<path d=\"M11 20a10 10 0 0010-10 25.9 25.9 0 00-1.04-7.281 1 1 0 00-1.755-.325C15.833 5.5 13 5.5 9.8 6.1A7 7 0 0011 20\" /><path d=\"M2 21a5 5 0 012.911-4.544C7.613 15.212 8.351 15.24 11 13\" />","plus":"<path d=\"M5 12h14\" /><path d=\"M12 5v14\" />","down":"<path d=\"m6 9 6 6 6-6\" />","fridge":"<path d=\"M5 6a4 4 0 0 1 4-4h6a4 4 0 0 1 4 4v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6Z\" /><path d=\"M5 10h14\" /><path d=\"M15 7v6\" />"};
 const ic = (n, cls = '') => `<svg class="ic ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${IC[n]}</svg>`;
 function appbar(title, sub, opts = {}) {
   return `<header class="appbar">${opts.back ? `<button class="iconbtn" data-back aria-label="Назад">${ic('back')}</button>` : ''}<div class="ab-t"><p class="eyebrow">${sub || 'Мой рацион'}</p><h1 class="gt">${title}</h1></div>${opts.back ? '' : `<button class="iconbtn" data-gear aria-label="Настройки">${ic('gear')}</button>`}</header>`;
@@ -851,9 +834,9 @@ function render() {
     if (old) { const t = document.createElement('div'); t.innerHTML = viewFeed(); const nw = t.firstElementChild; ['.ftop', '.deck'].forEach(q => { const a = old.querySelector(q), b = nw.querySelector(q); if (a && b) a.replaceWith(b); }); }
     else v.innerHTML = viewFeed();
     bindFeed(); $('#nav').hidden = true; return; }
-  if (S.ui.tab === 'settings') $('#nav').hidden = true;
+  if (S.ui.tab === 'settings' || S.ui.tab === 'fridge') $('#nav').hidden = true;
   document.body.classList.toggle('empty-stream', S.ui.tab === 'stream');
-  ({plan: viewPlan, stream: viewStream, analytics: viewAnalytics, collect: viewCollect, shop: viewShop, settings: viewSettings}[S.ui.tab] || viewPlan)();
+  ({plan: viewPlan, stream: viewStream, analytics: viewAnalytics, collect: viewCollect, shop: viewShop, fridge: viewFridge, settings: viewSettings}[S.ui.tab] || viewPlan)();
   bindSurfaceLight();
 }
 
@@ -1311,7 +1294,7 @@ function viewCollect() {
     <p class="hint wish-help">${selectedDates.length ? 'Выбрано дат: ' + selectedDates.length + '. Блюдо встанет в свободный приём каждой даты.' : 'Без выбранных дат — ближайший свободный приём.'}</p>
     ${wishes.length ? `<div class="chips">${[...new Set(wishes.map(x => x.dish.name))].map(n => `<span class="chip">${esc(n)}</span>`).join('')}</div>` : ''}</div>
     <div class="panel gap collect-options"><div class="field switch">${ic('shop')}<span><em>Есть продукты дома</em><small>Блюда из них — в ближайшие дни</small></span><button class="tog${c.homeOn ? ' on' : ''}" id="c-home-tog" role="switch" aria-checked="${c.homeOn}" aria-label="Есть продукты дома"><i></i></button></div>
-    ${c.homeOn ? `<div class="field col"><div class="chipin"><input id="c-home" placeholder="Например, гречка"><button class="btn ghost sm" id="c-home-add">Добавить</button></div><div class="chips">${c.home.map((n, i) => `<button class="chip x" data-rmhome="${i}">${esc(n)}</button>`).join('')}</div></div>` : ''}
+    ${c.homeOn ? `<button class="btn ghost wide" id="c-fridge">${ic('fridge')} Мой холодильник · ${homeNames().length}</button>` : ''}
     <div class="field switch">${ic('dish')}<span><em>Готовить на 2 дня</em><small>Обед и ужин — одной готовкой</small></span><button class="tog${c.cook2 ? ' on' : ''}" id="c-cook2" role="switch" aria-checked="${c.cook2}" aria-label="Готовить на 2 дня"><i></i></button></div>
     </div>`;
   const v = $('#view');
@@ -1329,15 +1312,21 @@ function viewCollect() {
   $('#c-wish-fav').onclick = wishFavorites;
   $('#c-go').onclick = startCollect; $('#c-auto').onclick = autoCollect;
   $('#c-home-tog').onclick = () => { c.homeOn = !c.homeOn; save(); render(); };
-  if (c.homeOn) { const add = () => { const n = $('#c-home').value.trim(); if (n && !c.home.includes(n)) c.home.push(n); save(); render(); }; $('#c-home-add').onclick = add; $('#c-home').onkeydown = e => { if (e.key === 'Enter') add(); }; v.querySelectorAll('[data-rmhome]').forEach(b => b.onclick = () => { c.home.splice(+b.dataset.rmhome, 1); save(); render(); }); }
+  if (c.homeOn) $('#c-fridge').onclick = () => openFridge('collect');
   $('#c-cook2').onclick = () => { c.cook2 = !c.cook2; save(); render(); };
 }
 function dishVisual(d, cls) {
   const photo = dishPhoto(d);
-  return `<div class="dish-visual ${cls}"><span class="dish-photo-placeholder" aria-hidden="true">${ic('dish')}<small>Фото блюда</small></span>${photo ? `<img src="${esc(photo)}" width="640" height="400" alt="" draggable="false" loading="${cls === 'feed-photo' ? 'eager' : 'lazy'}" onerror="this.remove()">` : ''}</div>`;
+  return `<div class="dish-visual ${cls}"><span class="dish-photo-placeholder" aria-hidden="true">${ic('dish')}<small>Фото блюда</small></span>${photo ? `<img src="${esc(photo)}" width="640" height="480" alt="" referrerpolicy="no-referrer" decoding="async" draggable="false" loading="${cls === 'feed-photo' ? 'eager' : 'lazy'}" onerror="this.remove()">` : ''}</div>`;
+}
+function safeDishImage(value) {
+  if (typeof value !== 'string' || value.length > 4096) return '';
+  try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password ? url.href : ''; } catch { return ''; }
 }
 function dishPhoto(d) {
-  if (!d || typeof TT_SET === 'undefined') return '';
+  if (!d) return '';
+  const remote = safeDishImage(d.imageUrl || d.image_url || d.photo_url || d.image?.url || d.image); if (remote) return remote;
+  if (typeof TT_SET === 'undefined') return '';
   const match = TT_SET.find(t => t.id === d.id || nameKey(t.name) === nameKey(d.name));
   return match ? 'img/tt/' + match.id + '.webp' : '';
 }
@@ -1388,9 +1377,9 @@ async function autoCollect() {
   let added = 0, failure = '';
   try {
     S.ui.autoProgress = 'Загружаем подходящие блюда…'; render(); await poolFill();
-    if (S.collect.homeOn && S.collect.home.length && Server.on() && !job.cancelled) {
+    if (homeNames().length && Server.on() && !job.cancelled) {
       for (const slot of pattern().map((_, i) => i).filter(i => 'ld'.includes(pattern()[i][0]))) {
-        try { await fetchDishes({day: 0, slot, seen: new Set()}, {home: S.collect.home, count: 3}); }
+        try { await fetchDishes({day: 0, slot, seen: new Set()}, {home: homeNames(), count: 3}); }
         catch (e) { if (KEY_ERRORS.includes(e.code)) throw e; }
       }
     }
@@ -1518,8 +1507,8 @@ async function startFeed(day, slot, manual, accessPending = false) {
 }
 function prepareFeedBackground(F) {
   poolFill();
-  if (!S.collect.homeOn || !S.collect.home.length || !Server.on() || S.plan.homeFor === S.collect.home.join('|')) return;
-  const plan = S.plan, home = [...S.collect.home]; plan.homeFor = home.join('|');
+  if (!homeNames().length || !Server.on() || S.plan.homeFor === homeNames().join('|')) return;
+  const plan = S.plan, home = homeNames(); plan.homeFor = home.join('|');
   (async () => {
     for (const si of pattern().map((m, i) => i).filter(i => 'ld'.includes(pattern()[i][0])).slice(0, 2)) {
       if (S.feed !== F || !F.active || S.plan !== plan) return;
@@ -1533,11 +1522,7 @@ function prepareFeedBackground(F) {
 }
 
 /* ---------- Лента карточек (как в знакомствах) ---------- */
-const FIC = {
-  take: '<path d="M5 12.5l4.2 4.2L19 7"/>', skip: '<path d="M6 6l12 12M18 6L6 18"/>',
-  dis: '<path d="M10 14.5v4.2a2.3 2.3 0 0 0 4.4.9l2.6-6.1V4.5H8.6a2 2 0 0 0-2 1.7l-1.1 6.2a2 2 0 0 0 2 2.3z" fill="currentColor" fill-opacity=".14"/><path d="M17 4.5h2.5v9H17"/>',
-  mark: '<path d="M5 19l1-4.2L15.6 5.2a2 2 0 0 1 2.8 0l.4.4a2 2 0 0 1 0 2.8L9.2 18 5 19z" fill="currentColor" fill-opacity=".14"/><path d="M14 7l3 3"/>'
-};
+const FIC = {"take":"<path d=\"M20 6 9 17l-5-5\" />","skip":"<path d=\"M18 6 6 18\" /><path d=\"m6 6 12 12\" />","dis":"<path d=\"M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88Z\" /><path d=\"M17 14V2\" />","mark":"<path d=\"M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7\" /><path d=\"M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z\" />"};
 const fic = n => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${FIC[n]}</svg>`;
 function cardHtml(d, m, slot, under) { // under — следующая карточка, лежит под текущей (без кнопок и жестов)
   const ff = famFactor(d, slot), n = nut(d, ff), expanded = !under && S.feed?.detailsId === d.id;
@@ -1552,9 +1537,8 @@ function cardHtml(d, m, slot, under) { // under — следующая карт�
    <div class="dc-body">
     <div class="grid4 kb"><div><b>${r0(n.kcal)}</b><span>ккал</span></div><div><b>${r0(n.p)}</b><span>белки, г</span></div><div><b>${r0(n.f)}</b><span>жиры, г</span></div><div><b>${r0(n.c)}</b><span>углев., г</span></div></div>
     <div class="facts"><div><em>Готовка</em><b>${d.time} мин</b></div><div><em>Стоимость</em><b>≈ ${r0(famCost(d) / 10) * 10} ₽</b></div></div>
-    ${S.marks.notes[d.id] ? `<p class="note">${ic('heart', 'sm')} ${esc(S.marks.notes[d.id])}</p>` : ''}
     <button class="ingmore" id="ingmore" aria-controls="ingbox" aria-expanded="${expanded}">${expanded ? 'Свернуть описание' : 'Читать полностью'}</button>
-    <div class="ingbox" id="ingbox"${expanded ? '' : ' hidden'}><p class="ingh">Ингредиенты · на ${S.people.length > 1 ? 'всю семью' : 'вас'}</p><ul class="ings">${ing}</ul>
+    <div class="ingbox" id="ingbox"${expanded ? '' : ' hidden'}>${S.marks.notes[d.id] ? `<p class="note">${esc(S.marks.notes[d.id])}</p>` : ''}<p class="ingh">Ингредиенты · на ${S.people.length > 1 ? 'всю семью' : 'вас'}</p><ul class="ings">${ing}</ul>
      ${stepsOf(d).length ? `<p class="ingh">Как готовить</p><ol class="csteps">${stepsOf(d).map(t => `<li>${esc(t)}</li>`).join('')}</ol>` : ''}</div>
    </div></div></article>`;
 }
@@ -1575,7 +1559,7 @@ function viewFeed() {
     <button class="fb fb-mark" id="f-mark" aria-label="Пометка">${fic('mark')}<span>Пометка</span></button>
     <button class="fb fb-take" id="f-take" aria-label="Взять">${fic('take')}<span>Взять</span></button>
    </div>
-   ${F.accessPending ? '<p class="feed-access-status" role="status">Проверяем доступ</p>' : ''}<p class="gest"><span>← пропуск</span><span>взять →</span><span>↓ КБЖУ и рецепт</span></p></footer>`;
+   ${F.accessPending ? '<p class="feed-access-status" role="status">Проверяем доступ</p>' : ''}<p class="gest"><span>← пропуск</span><span>взять →</span><span>Подробнее — «Читать полностью»</span></p></footer>`;
   return `<section class="feedwrap" id="feedwrap"><div class="feed">
    <header class="ftop"><button class="iconbtn" id="f-close" aria-label="Свернуть подбор">${ic('down')}</button><div class="fday"><button class="arrow" id="f-prev" aria-label="Предыдущий день">‹</button><span>${DOW[dt.getDay()]}, ${dt.getDate()} ${MON[dt.getMonth()]}</span><button class="arrow" id="f-next" aria-label="Следующий день">›</button></div><span class="fcount">${done}<small>/${total}</small></span></header>
    <div class="deck" id="deck"><div class="ghostcard g2"></div>${under}${card.replace(/(<article[^>]*>)/, '$1' + slots).replace('</article>', actions + '</article>')}</div>
@@ -1595,7 +1579,7 @@ function ingFull() {
   const open = body.hidden;
   body.hidden = !open; card.classList.toggle('details-open', open);
   button.setAttribute('aria-expanded', String(open)); button.textContent = open ? 'Свернуть описание' : 'Читать полностью';
-  F.detailsId = open ? F.card.dish.id : null; save();
+  F.detailsId = open ? F.card.dish.id : null; if (!open) $('.dc-content', card).scrollTop = 0; save();
 }
 const rubber = (v, lim) => Math.sign(v) * lim * (1 - Math.exp(-Math.abs(v) / lim)); // тянется, но не дальше предела
 function bindFeed() {
@@ -1609,6 +1593,8 @@ function bindFeed() {
   const pk = $('#f-pick'); if (pk) { pk.disabled = !!F.accessPending; pk.onclick = pickSeen; }
   const card = $('#card'); if (!card) return;
   bindFeed.observer?.disconnect();
+  const fitText=()=>card.classList.toggle('large-text',parseFloat(getComputedStyle(document.documentElement).fontSize)>20); fitText();
+  bindFeed.observer=new ResizeObserver(fitText); bindFeed.observer.observe($('.dc-content',card));
   const more = $('#ingmore'); more.onclick = ingFull; more.addEventListener('pointerdown', e => e.stopPropagation());
   if (!live) return;
   let g = null; // жест: старт, ось, смещение
@@ -1719,17 +1705,34 @@ function fmtDates(idx, short) { // 12–14 октября · 30 сентября
   return ds.slice(0, -1).map(part).join(', ') + ' и ' + part(z) + (sameM ? ' ' + M[a.getMonth()] : '');
 }
 function shopDays() { // собранные, но ещё не закупленные дни; при выборе половины — только она
-  const pend = S.plan.days.map((d, i) => i).filter(i => !S.shop.bought[dayDate(i)] && S.plan.days[i].slots.some(s => s && !s.leftover));
+  const pend = S.plan.days.map((d, i) => i).filter(i => !S.shop.bought[dayDate(i)] && S.plan.days[i].slots.some(s => s && !s.leftover && !s.unsafe && s.status!=='skipped'));
   const split = pend.length > 4, r = split ? S.shop.range : 'all';
   return {pend, split, sel: r === 'a' ? pend.slice(0, 3) : r === 'b' ? pend.slice(3) : pend};
 }
 function shopList(days) {
-  const map = {}, home = S.collect.homeOn ? S.collect.home.map(x => x.toLowerCase()) : [];
-  days.forEach(d => S.plan.days[d].slots.forEach((sl, i) => { if (!sl) return; const ff = famFactor(sl.dish, i);
-    sl.dish.ing.forEach(x => { const k = x.name; map[k] = map[k] || {i: x, g: 0}; map[k].g += x.g * ff; }); }));
-  const ad = planAddons(); days.forEach(d => (ad[d] || []).forEach(x => { const k = x.ing.name; map[k] = map[k] || {i: x.ing, g: 0}; map[k].g += x.g; }));
-  return Object.values(map).map(o => { const rd = roundAmt(o.i, o.g); const has = home.some(h => o.i.name.toLowerCase().includes(h) || h.includes(o.i.name.toLowerCase()));
-    return {name: o.i.name, cat: o.i.cat, need: o.g, amt: rd.t, price: has ? 0 : (o.i.price || 0) * rd.g / 1000, has}; }).sort((x, y) => x.name.localeCompare(y.name, 'ru'));
+  const map = [];
+  const add = (i,g) => { const old=map.find(o=>RacionPantry.find({items:[o.i]},i)); if(old) old.g+=g; else map.push({i,g}); };
+  days.forEach(d => S.plan.days[d].slots.forEach((sl,i) => { if(!sl || sl.unsafe || sl.status==='skipped') return; const ff=famFactor(sl.dish,i); sl.dish.ing.forEach(x=>add(x,x.g*ff)); }));
+  const addons=planAddons(); days.forEach(d=>(addons[d]||[]).forEach(x=>add(x.ing,x.g)));
+  return map.filter(({g})=>g>1e-6).map(({i,g})=>{
+    const q=RacionPantry.quote(S.fridge,i,g,S.collect.homeOn,roundAmt);
+    return {...q,name:i.name,cat:i.cat,has:q.missing<=1e-6,amt:q.pack && q.buy>0 ? `${q.count} уп. × ${stockAmount(q.pack.size,i)}` : stockAmount(q.buy,i)};
+  }).sort((a,b)=>a.name.localeCompare(b.name,'ru'));
+}
+function stockAmount(amount,i) {
+  if(amount == null) return 'Укажите остаток';
+  const volume=i.unit==='ml', pcs=i.unit==='pcs', n=pcs ? amount/(+i.pcs_g||55) : amount>=1000 ? amount/1000 : amount;
+  return new Intl.NumberFormat('ru-RU',{maximumFractionDigits:3}).format(n)+' '+(pcs?'шт.':volume?(amount>=1000?'л':'мл'):(amount>=1000?'кг':'г'));
+}
+function purchaseSignature(rows,dates) { return S.plan.start+'|'+dates.join(',')+'|'+rows.map(r=>r.key+':'+r.need.toFixed(6)).join(';'); }
+function confirmShopping(days) {
+  const dates=days.map(dayDate); if(!dates.length || dates.every(d=>S.shop.bought[d])) return null;
+  const rows=shopList(days); if(!rows.length)return null; const result=RacionPantry.purchase(S.fridge,rows,purchaseSignature(rows,dates),dates);
+  dates.forEach(d=>S.shop.bought[d]=true); S.shop.lastBought=dates; S.shop.receiptId=result.receipt.id; S.shop.checked={}; S.shop.range='all'; syncFridgeHome(); return result;
+}
+function undoShopping() {
+  if(S.shop.receiptId) RacionPantry.undo(S.fridge,S.shop.receiptId);
+  (S.shop.lastBought||[]).forEach(d=>delete S.shop.bought[d]); S.shop.lastBought=null; S.shop.receiptId=null; syncFridgeHome();
 }
 function buyHead(sel) {
   const run = sel.every((d, k) => !k || d === sel[k - 1] + 1), n = sel.length;
@@ -1739,63 +1742,73 @@ function buyHead(sel) {
   if (part.length) sub.push(part.length === 1 ? `${fmtDates(part, true)} собран не полностью` : `не полностью: ${fmtDates(part, true)}`);
   return `<section class="buycard"><h2 class="gt">${title}</h2><p class="buysub">${sub.join(' · ')}</p></section>`;
 }
-function fridgeProducts() {
-  return Object.entries(S.shop.checked).filter(([name, checked]) => checked && !S.collect.home.some(item => nameKey(item) === nameKey(name))).map(([name]) => name);
+function stockCatalog() {
+  const map=new Map(); [...Object.values(ING),...Object.values(S.dishStore).flatMap(d=>d.ing||[]),...S.fridge.items].forEach(i=>{if(i?.name)map.set(RacionPantry.key(i),i);});
+  return [...map.values()].sort((a,b)=>a.name.localeCompare(b.name,'ru'));
 }
-function fridgeHtml() {
-  const products = S.collect.home, purchased = fridgeProducts();
-  return `<details class="fridge" id="s-fridge"${S.ui.fridgeOpen ? ' open' : ''}><summary><span class="medal">${ic('fridge')}</span><span><b>Мой холодильник</b><small>${products.length ? 'Продуктов дома: ' + products.length : 'Что уже есть дома'}</small></span>${ic('down')}</summary>
-    <div class="fridge-body"><form id="fridge-form"><label for="fridge-name">Добавить продукт</label><div class="fridge-add"><input id="fridge-name" maxlength="80" autocomplete="off" placeholder="Например, молоко" list="fridge-products"><button class="btn primary" type="submit">Добавить</button></div></form>
-      <datalist id="fridge-products">${Object.values(ING).map(i => `<option value="${esc(i.name)}"></option>`).join('')}</datalist>
-      ${products.length ? `<ul class="fridge-list">${products.map((name, index) => `<li><span>${esc(name)}</span><button class="iconbtn" data-fridge-remove="${index}" aria-label="${esc('Убрать из холодильника: ' + name)}">${ic('plus')}</button></li>`).join('')}</ul>` : '<p class="hint fridge-empty">Добавьте продукты, которые уже есть дома.</p>'}
-      ${purchased.length ? `<button class="btn ghost wide" id="fridge-purchased">Добавить отмеченные покупки · ${purchased.length}</button>` : ''}
-      <div class="field switch"><span><em>Учитывать в рационе</em><small>Использовать список как продукты дома</small></span><button class="tog${S.collect.homeOn ? ' on' : ''}" id="fridge-use" role="switch" aria-label="Учитывать продукты холодильника в рационе" aria-checked="${S.collect.homeOn}"><i></i></button></div>
-    </div></details>`;
+function openFridge(from='shop') { S.ui.fridgeReturn=from; S.ui.tab='fridge'; S.ui.set=null; save(); render(); }
+function fridgeHtml() { return `<button class="fridge-entry" id="s-fridge"><span class="medal">${ic('fridge')}</span><span><b>Мой холодильник</b><small>Продуктов: ${S.fridge.items.length} · остатки и упаковки</small></span>${ic('chev')}</button>`; }
+function bindFridge() { const b=$('#s-fridge'); if(b)b.onclick=()=>openFridge(); }
+function quantityOptions(i,selected) {
+  return (i.unit==='ml' ? [['ml','мл'],['l','л']] : i.unit==='pcs' ? [['pcs','шт.']] : [['g','г'],['kg','кг']]).map(([v,t])=>`<option value="${v}"${v===selected?' selected':''}>${t}</option>`).join('');
 }
-function bindFridge() {
-  const details = $('#s-fridge'); if (!details) return;
-  details.ontoggle = () => { S.ui.fridgeOpen = details.open; save(); };
-  const repaint = () => { S.ui.fridgeOpen = true; save(); render(); };
-  $('#fridge-form').onsubmit = e => {
-    e.preventDefault(); const input = $('#fridge-name'), name = input.value.trim(); if (!name) return input.focus();
-    if (S.collect.home.some(item => nameKey(item) === nameKey(name))) { input.value = ''; return toast('Этот продукт уже есть в холодильнике'); }
-    S.collect.home.push(name); repaint(); $('#fridge-name').focus({preventScroll:true});
-  };
-  details.querySelectorAll('[data-fridge-remove]').forEach(button => button.onclick = () => { S.collect.home.splice(+button.dataset.fridgeRemove, 1); repaint(); $('#fridge-name').focus({preventScroll:true}); });
-  const purchased = $('#fridge-purchased'); if (purchased) purchased.onclick = () => { S.collect.home.push(...fridgeProducts()); repaint(); $('#fridge-name').focus({preventScroll:true}); };
-  $('#fridge-use').onclick = () => { S.collect.homeOn = !S.collect.homeOn; repaint(); $('#fridge-use').focus({preventScroll:true}); };
+function packageSheet(i) {
+  const pack=S.fridge.packs[RacionPantry.key(i)], unit=i.unit==='ml'?'ml':i.unit==='pcs'?'pcs':'g';
+  const size=pack ? (unit==='pcs'?pack.size/(+i.pcs_g||55):pack.size) : (unit==='pcs'?1:1000);
+  sheet(`<h2>Упаковка · ${esc(i.name)}</h2><form id="pack-form"><label>Как покупать<select id="pack-mode"><option value="loose"${!pack?' selected':''}>На вес / поштучно</option><option value="pack"${pack?' selected':''}>Целыми упаковками</option></select></label><div id="pack-fields"><div class="row2"><label>Количество в упаковке<input id="pack-size" type="number" min="0.001" max="1000000" step="any" value="${size}" required></label><label>Единица<select id="pack-unit">${quantityOptions(i,unit)}</select></label></div><label>Цена одной упаковки, ₽<input id="pack-price" type="number" min="0" step="0.01" value="${pack?.price ?? ''}" placeholder="Необязательно"></label><p class="hint">Если цену не указать, используем цену продукта за килограмм или литр из каталога.</p></div><p id="pack-error" role="alert"></p><button class="btn primary wide" type="submit">Сохранить</button></form>`,body=>{
+    const update=()=>{const on=$('#pack-mode').value==='pack';$('#pack-fields').hidden=!on;$('#pack-size').disabled=!on;}; update();$('#pack-mode').onchange=update;
+    $('#pack-form').onsubmit=e=>{e.preventDefault();try{const price=$('#pack-price').value;RacionPantry.setPack(S.fridge,i,$('#pack-mode').value==='pack'?{size:RacionPantry.toBase($('#pack-size').value,$('#pack-unit').value,i),price:price===''?null:+price}:null);save();closeSheet();render();}catch(error){$('#pack-error').textContent=error.message;}};
+  });
+}
+function viewFridge() {
+  const items=[...S.fridge.items].sort((a,b)=>a.name.localeCompare(b.name,'ru'));
+  $('#view').innerHTML=`${appbar('Мой холодильник','Остатки для следующих рационов',{back:true})}<section class="panel stock-intro"><p>Здесь остаётся лишнее из купленных упаковок. Нужная часть уже отложена на подтверждённый рацион.</p><div class="field switch"><span><em>Использовать остатки</em><small>Учитывать в покупках и подборе блюд</small></span><button class="tog${S.collect.homeOn?' on':''}" id="fridge-use" role="switch" aria-checked="${S.collect.homeOn}" aria-label="Использовать остатки"><i></i></button></div></section>
+    <section class="panel gap"><h2 class="stock-form-title">Остаток продукта</h2><form id="fridge-form"><label>Продукт<input id="fridge-name" list="fridge-products" maxlength="100" autocomplete="off" required placeholder="Гречка, миндаль…"></label><datalist id="fridge-products">${stockCatalog().map(i=>`<option value="${esc(i.name)}"></option>`).join('')}</datalist><div class="row2"><label>Сколько осталось<input id="fridge-amount" type="number" min="0" max="1000000" step="any" required placeholder="600"></label><label>Единица<select id="fridge-unit"><option value="g">г</option><option value="kg">кг</option><option value="ml">мл</option><option value="l">л</option><option value="pcs">шт.</option></select></label></div><p id="fridge-error" role="alert"></p><button class="btn primary wide" type="submit">Сохранить остаток</button><button class="btn ghost wide" id="fridge-cancel" type="button" hidden>Отменить редактирование</button></form></section>
+    <section class="stock-list" aria-label="Продукты в холодильнике">${items.length?items.map((i,index)=>{const pack=S.fridge.packs[RacionPantry.key(i)];return `<article class="stock-card"><div><h3>${esc(i.name)}</h3><b>${stockAmount(i.amount,i)}</b>${pack?`<p>Упаковка ${stockAmount(pack.size,i)}${pack.price!=null?' · '+pack.price+' ₽':''}</p>`:''}</div><div class="stock-actions"><button class="btn ghost sm" data-stock-edit="${index}">Изменить</button><button class="btn ghost sm" data-stock-pack="${index}">Упаковка</button><button class="iconbtn" data-stock-remove="${index}" aria-label="${esc('Удалить '+i.name)}">${fic('skip')}</button></div></article>`;}).join(''):'<div class="empty"><h3>Пока нет остатков</h3><p>Добавьте то, что есть дома. Остатки новых упаковок появятся после подтверждения закупки.</p></div>'}</section>`;
+  let editing=null;
+  $('#fridge-name').onchange=()=>{const i=stockCatalog().find(i=>RacionPantry.norm(i.name)===RacionPantry.norm($('#fridge-name').value));if(i)$('#fridge-unit').value=i.unit==='ml'?'ml':i.unit==='pcs'?'pcs':'g';};
+  $('#fridge-form').onsubmit=e=>{e.preventDefault();try{const name=$('#fridge-name').value.trim(),unit=$('#fridge-unit').value;const i=editing||stockCatalog().find(i=>RacionPantry.norm(i.name)===RacionPantry.norm(name))||{name,unit:unit==='ml'||unit==='l'?'ml':unit==='pcs'?'pcs':'g',pcs_g:55};if((i.unit==='ml')!==['ml','l'].includes(unit) || (i.unit==='pcs')!==(unit==='pcs'))throw new Error('Выберите единицу измерения этого продукта');RacionPantry.put(S.fridge,i,RacionPantry.toBase($('#fridge-amount').value,unit,i));syncFridgeHome();save();render();$('#fridge-name').focus({preventScroll:true});}catch(error){$('#fridge-error').textContent=error.message;}};
+  $('#fridge-cancel').onclick=()=>render();
+  document.querySelectorAll('[data-stock-edit]').forEach(b=>b.onclick=()=>{editing=items[+b.dataset.stockEdit];$('#fridge-name').value=editing.name;$('#fridge-name').readOnly=true;$('#fridge-unit').value=editing.unit==='ml'?'ml':editing.unit==='pcs'?'pcs':'g';$('#fridge-amount').value=editing.amount==null?'':editing.unit==='pcs'?editing.amount/(+editing.pcs_g||55):editing.amount;$('#fridge-cancel').hidden=false;$('#fridge-amount').focus();});
+  document.querySelectorAll('[data-stock-pack]').forEach(b=>b.onclick=()=>packageSheet(items[+b.dataset.stockPack]));
+  document.querySelectorAll('[data-stock-remove]').forEach(b=>b.onclick=()=>{RacionPantry.remove(S.fridge,items[+b.dataset.stockRemove]);syncFridgeHome();save();render();});
+  $('#fridge-use').onclick=()=>{S.collect.homeOn=!S.collect.homeOn;save();render();$('#fridge-use').focus({preventScroll:true});};
 }
 function viewShop() {
   const v = $('#view');
   const goCollect = () => { S.ui.tab = 'collect'; save(); render(); };
-  const undo = S.shop.lastBought && S.shop.lastBought.some(k => S.shop.bought[k]) ? `<p class="buyundo">Закупка отмечена. <button class="linkbtn" id="s-undo">Вернуть</button></p>` : '';
-  const bindUndo = () => { const u = $('#s-undo'); if (u) u.onclick = () => { S.shop.lastBought.forEach(k => delete S.shop.bought[k]); S.shop.lastBought = null; save(); render(); }; };
+  const undoable=S.shop.lastBought && S.shop.lastBought.some(k=>S.shop.bought[k]) && (!S.shop.receiptId || RacionPantry.canUndo(S.fridge,S.shop.receiptId));
+  const undo=undoable?'<p class="buyundo">Закупка подтверждена. <button class="linkbtn" id="s-undo">Отменить закупку</button></p>':'';
+  const bindUndo=()=>{const u=$('#s-undo');if(u)u.onclick=()=>{try{undoShopping();save();render();}catch(error){toast(error.message);}};};
   if (!S.plan || !S.plan.days.some(d => d.slots.some(Boolean))) { v.innerHTML = `${appbar('Продукты', 'Список покупок')}${fridgeHtml()}<section class="buycard"><h2 class="gt">Закупка пока не собрана</h2><p class="buysub">Соберите рацион — здесь появится список продуктов на собранные дни</p><button class="btn primary" id="s-go">Собрать рацион</button></section>`; $('#s-go').onclick = goCollect; bindFridge(); return; }
   const {pend, split, sel} = shopDays();
   if (!pend.length) { const bd = S.plan.days.map((d, i) => i).filter(i => S.shop.bought[dayDate(i)]);
-    v.innerHTML = `${appbar('Продукты', 'Список покупок')}${fridgeHtml()}<section class="buycard"><h2 class="gt">Всё собранное закуплено</h2><p class="buysub">${bd.length ? `Закуплено: ${fmtDates(bd)}. ` : ''}Соберите следующие дни — список появится здесь</p><button class="btn primary" id="s-go">Собрать рацион</button></section>${undo}`;
+    v.innerHTML = `${appbar('Продукты', 'Список покупок')}${fridgeHtml()}<section class="buycard"><h2 class="gt">${bd.length?'Всё собранное закуплено':'Нет продуктов к покупке'}</h2><p class="buysub">${bd.length ? `Закуплено: ${fmtDates(bd)}. ` : ''}Соберите следующие дни — список появится здесь</p><button class="btn primary" id="s-go">Собрать рацион</button></section>${undo}`;
     $('#s-go').onclick = goCollect; bindUndo(); bindFridge(); return; }
-  const list = shopList(sel), total = sel.reduce((s, di) => s + S.plan.days[di].slots.reduce((a, sl) => a + (sl ? famCost(sl.dish) : 0), 0), 0), budget = +S.collect.budget || 0;
+  const list=shopList(sel), total=list.reduce((sum,row)=>sum+row.price,0), unknownPrices=list.filter(row=>!row.priceKnown).length, budget=+S.collect.budget||0;
   const budgetPart = budget * sel.length / S.plan.len;
   const over = budgetPart && total > budgetPart;
   const ranges = split ? [['all', 'Всё сразу'], ['a', fmtDates(pend.slice(0, 3), true)], ['b', fmtDates(pend.slice(3), true)]] : [];
-  const row = x => `<li class="${S.shop.checked[x.name] ? 'done' : ''}${x.has ? ' has' : ''}"><button data-check="${esc(x.name)}" aria-pressed="${!!S.shop.checked[x.name]}" aria-label="${esc(x.name)}: ${S.shop.checked[x.name] ? 'убрать отметку' : 'отметить купленным'}"><span class="nm">${esc(x.name)}</span><span class="am">${x.has ? 'есть дома' : x.amt}</span><span class="pr">${x.has ? '' : '≈ ' + r0(x.price / 10) * 10 + ' ₽'}</span></button></li>`;
+  const row=x=>`<li class="${S.shop.checked[x.name]?'done':''}${x.has?' has':''}"><button data-check="${esc(x.name)}" aria-pressed="${!!S.shop.checked[x.name]}" aria-label="${esc(x.name+': '+(S.shop.checked[x.name]?'убрать отметку':'отметить покупку'))}"><span class="nm">${esc(x.name)}</span><span class="am">${x.has?'Из холодильника: '+stockAmount(x.used,x.i):x.amt}</span><span class="pr">${x.buy===0?'':x.priceKnown?'≈ '+r0(x.price)+' ₽':'Цена не указана'}</span></button><div class="purchase-detail"><span>Нужно ${stockAmount(x.need,x.i)}${x.used>0?' · дома '+stockAmount(x.used,x.i):''}${x.buy>x.missing?' · останется '+stockAmount(x.after,x.i):''}</span><button class="linkbtn" data-package="${esc(x.key)}">${x.pack?'Изменить упаковку':'Упаковка'}</button></div></li>`;
   let body;
   if (S.shop.group) { const cats = {}; list.forEach(x => (cats[x.cat] = cats[x.cat] || []).push(x)); body = Object.keys(cats).sort().map(k => `<h4 class="cat">${k}</h4><ul class="shop">${cats[k].map(row).join('')}</ul>`).join(''); }
   else body = `<ul class="shop">${list.map(row).join('')}</ul>`;
   v.innerHTML = `${appbar('Продукты', 'Список покупок')}${fridgeHtml()}
-  <div class="total"><div><span class="small">Примерно</span><b>${r0(total / 10) * 10} ₽</b></div><div><span class="small">Бюджет</span><b>${r0(budgetPart)} ₽</b></div></div>
+  <div class="total"><div><span class="small">Примерно</span><b>${unknownPrices===list.length && list.length?'—':r0(total)+' ₽'}</b></div><div><span class="small">Бюджет</span><b>${r0(budgetPart)} ₽</b></div></div>
   ${over ? `<div class="warn box">Перерасход ≈ ${r0((total - budgetPart) / 10) * 10} ₽. <button class="btn ghost sm" id="s-cheap">Удешевить 5 самых дорогих блюд</button></div>` : ''}
+  ${unknownPrices?`<p class="hint">Не указана цена у ${unknownPrices} продуктов. Они не включены в сумму; цену упаковки можно задать в строке.</p>`:''}
   ${buyHead(sel)}
   <section class="shopping-progress" aria-label="Готовность списка покупок"><div><span>${ic('shop')} В корзине</span><b>${list.filter(x => S.shop.checked[x.name] || x.has).length}<small> / ${list.length}</small></b></div><progress max="${Math.max(1,list.length)}" value="${list.filter(x => S.shop.checked[x.name] || x.has).length}" aria-label="Продуктов отмечено"></progress><p>${list.some(x => x.has) ? 'Продукты дома уже учтены. ' : ''}Отмечайте покупки — список запомнит ваш прогресс.</p></section>
   ${split ? `<div class="seg">${ranges.map(([k, t]) => `<button class="${(S.shop.range || 'all') === k ? 'on' : ''}" data-range="${k}">${t}</button>`).join('')}</div>` : ''}
   <div class="actions two"><button class="btn ghost" id="s-group">${S.shop.group ? 'Без групп' : 'Сгруппировать'}</button><button class="btn ghost" id="s-share">Поделиться</button></div>
   ${body}
   <button class="btn primary wide big" id="s-copy">Скопировать список</button>
+  <p class="hint purchase-note">После «Закуплено» нужная часть будет отложена на рацион, а лишнее из упаковок попадёт в холодильник.</p>
   <button class="btn ghost wide" id="s-bought">Закуплено · ${fmtDates(sel, true)}</button>
   ${undo}
-  <p class="hint">Цены ориентировочные, по средним ценам сетевых магазинов. Нажмите на продукт, чтобы вычеркнуть.</p>`;
+  <p class="hint">Цены ориентировочные, по средним ценам сетевых магазинов. Отметьте продукты в списке, затем подтвердите закупку.</p>`;
   bindFridge();
+  v.querySelectorAll('[data-package]').forEach(b=>b.onclick=()=>packageSheet(list.find(x=>x.key===b.dataset.package).i));
   v.querySelectorAll('[data-range]').forEach(b => b.onclick = () => { S.shop.range = b.dataset.range; save(); render(); });
   v.querySelectorAll('[data-check]').forEach(b => b.onclick = () => {
     const k = b.dataset.check; S.shop.checked[k] = !S.shop.checked[k]; save();
@@ -1804,7 +1817,7 @@ function viewShop() {
     const count = list.filter(x => S.shop.checked[x.name] || x.has).length;
     $('.shopping-progress b').innerHTML = count + '<small> / ' + list.length + '</small>';
     $('.shopping-progress progress').value = count;
-    const wasOpen = $('#s-fridge').open; $('#s-fridge').outerHTML = fridgeHtml(); $('#s-fridge').open = wasOpen; bindFridge();
+
   });
   $('#s-group').onclick = () => { S.shop.group = !S.shop.group; save(); render(); };
   const text = () => 'Список покупок — Мой рацион\n' + list.filter(x => !x.has).map(x => `${S.shop.checked[x.name] ? '✓' : '•'} ${x.name} — ${x.amt}`).join('\n') + `\nИтого ≈ ${r0(total / 10) * 10} ₽`;
@@ -1812,7 +1825,7 @@ function viewShop() {
   $('#s-copy').onclick = copy;
   $('#s-share').onclick = async () => { if (navigator.share) { try { await navigator.share({title: 'Список покупок', text: text()}); return; } catch (e) { if (e.name === 'AbortError') return; } } copy(); };
   const ch = $('#s-cheap'); if (ch) ch.onclick = cheapen;
-  $('#s-bought').onclick = () => { const ks = sel.map(dayDate); ks.forEach(k => S.shop.bought[k] = true); S.shop.lastBought = ks; S.shop.checked = {}; S.shop.range = 'all'; save(); render(); const sc = $('#scroller'); if (sc) sc.scrollTop = 0; toast(`Закуплено: ${fmtDates(sel, true)}`); };
+  $('#s-bought').onclick=()=>{try{confirmShopping(sel);save();render();$('#scroller').scrollTop=0;toast('Покупка учтена. Остатки упаковок — в холодильнике.');}catch(error){toast(error.message);}};
   bindUndo();
 }
 function cheapen() {
@@ -1840,7 +1853,7 @@ function viewSettings() {
     v.innerHTML = `${appbar('Настройки', 'Профиль и приложение', {back: true})}
     <button class="profile" data-person="${me.id}"><span class="mono">${esc(me.name.slice(0, 1).toUpperCase())}</span><span><b>${esc(me.name)}</b><small>${r0(t.E)} ккал · белок ${r0(t.P)} г в день</small></span>${ic('chev', 'sm')}</button>
     <nav class="rows">${SET_PAGES.map(([k, t, s]) => `<button class="row" data-set="${k}"><span class="medal">${ic(SET_IC[k])}</span><span><b>${t}</b><small>${s}</small></span>${ic('chev', 'sm')}</button>`).join('')}</nav>
-    <p class="hint center">Мой рацион · версия 0.16.0</p>`;
+    <p class="hint center">Мой рацион · версия 0.17.0</p>`;
     v.querySelectorAll('[data-set]').forEach(b => b.onclick = () => { S.ui.set = b.dataset.set; save(); render(); });
     v.querySelector('[data-person]').onclick = () => editPerson(me);
     return;
@@ -2156,7 +2169,7 @@ document.querySelectorAll('.tab').forEach(b => b.onclick = () => { S.ui.tab = b.
 document.addEventListener('click', e => {
   if (autoRun && (e.target.closest('[data-gear]') || e.target.closest('[data-back]'))) return;
   if (e.target.closest('[data-gear]')) { S.ui.prevTab = S.ui.tab; S.ui.tab = 'settings'; S.ui.set = null; save(); render(); }
-  else if (e.target.closest('[data-back]')) { if (S.ui.set) S.ui.set = null; else S.ui.tab = S.ui.prevTab || 'plan'; save(); render(); }
+  else if (e.target.closest('[data-back]')) { if (S.ui.tab === 'fridge') { S.ui.tab = S.ui.fridgeReturn || 'shop'; save(); render(); return; } if (S.ui.set) S.ui.set = null; else S.ui.tab = S.ui.prevTab || 'plan'; save(); render(); }
 });
 document.addEventListener('input', e => { if (e.target.id !== 'pf-height' && e.target.id !== 'pf-weight') return;
   const g = $('#pf-goal'), o = g && g.querySelector('option[value="loss"]'); if (!o) return;
