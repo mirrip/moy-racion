@@ -1248,6 +1248,86 @@ body.empty-stream, body.empty-stream #scroller, body.empty-stream #view { backgr
 .component-name>small, .nutrient .range-state { overflow-wrap:anywhere; }
 .component-symbol { font-size:clamp(14px,1.0625rem,20px); }
 
+/* 0.16 — inset portrait photography, inline recipe and useful screen width. */
+.feedwrap { touch-action:auto; }
+.dcard#card { display:flex; flex-direction:column; touch-action:pan-y; }
+.dcard .dc-content { flex:1 1 auto; min-height:0; overflow:auto; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; touch-action:pan-y; scrollbar-width:thin; }
+.dcard .dc-content:focus-visible { outline:2px solid var(--gold); outline-offset:-4px; }
+.dcard .dc-content .dc-body { flex:none; min-height:auto; }
+.dcard .dc-content .ingbox { flex:none; overflow:visible; min-height:auto; -webkit-mask-image:none; mask-image:none; }
+.dcard .ingmore { flex:none; display:block; width:100%; min-height:44px; margin-top:2px; }
+:root[data-theme="garden"] .dcard .dc-hero { padding:8px; background:none; }
+:root[data-theme="garden"] .dcard .feed-photo { width:100%; height:auto; max-height:none; aspect-ratio:3/4; border:2px solid #c6a75f; border-radius:22px 10px 24px 10px; box-shadow:0 2px 0 #a7a27166,0 10px 18px -13px #173b24; }
+:root[data-theme="garden"] .dcard .dc-head { margin-top:10px; padding:12px 14px; border:1px solid #9da16d; border-radius:17px 7px 19px 7px; background:var(--green-fill); color:#fffbe9; box-shadow:inset 0 1px 0 #e6edb65c,0 3px 0 #8c9e6752; }
+:root[data-theme="garden"] .dcard .cname { color:#fffbe9; font-size:1.375rem; line-height:1.25; }
+:root[data-theme="garden"] .dcard .dc-body { padding:8px 12px 14px; }
+:root[data-theme="garden"] .dcard .dc-content .ingbox { display:block; padding-top:10px; }
+:root[data-theme="garden"] .dcard .dc-content .ingbox[hidden] { display:none; }
+:root[data-theme="garden"] .dcard .dc-content .ingmore { color:#22563b; background:linear-gradient(135deg,#fdf7df,#e3e8ca); border:1px solid #aebc91; }
+:root[data-theme="garden"] .meal .mhead { padding:8px; }
+:root[data-theme="garden"] .meal .meal-photo { width:100%; height:auto; max-height:none; aspect-ratio:3/4; margin:0 0 4px; border:2px solid #c6a75f; border-radius:20px 8px 22px 8px; box-shadow:0 2px 0 #a7a27166,0 8px 16px -12px #173b24; }
+:root[data-theme="garden"] .meal .mname { padding:12px 14px; border:1px solid #9da16d; border-radius:16px 7px 18px 7px; background:var(--green-fill); color:#fffbe9; box-shadow:inset 0 1px 0 #e6edb65c,0 2px 0 #8c9e6752; }
+:root[data-theme="garden"] .meal :is(.mtype,.macro,.meta) { margin-inline:8px; }
+:root[data-theme="garden"] .meal .meta { margin-bottom:8px; }
+:root[data-theme="garden"] .recipe-photo { aspect-ratio:3/4; max-height:none; }
+.fridge { margin:0 0 18px; border:1px solid var(--line); border-radius:24px 10px 26px 10px; background:var(--surface); color:var(--fg); }
+.fridge>summary { display:flex; align-items:center; gap:12px; padding:14px 16px; cursor:pointer; list-style:none; }
+.fridge>summary::-webkit-details-marker { display:none; }
+.fridge>summary>span:nth-child(2) { display:grid; gap:3px; flex:1; min-width:0; }
+.fridge>summary b { font-size:1rem; }
+.fridge>summary small { color:var(--muted); font-size:.75rem; }
+.fridge>summary>.ic { width:18px; height:18px; flex:none; }
+.fridge[open]>summary>.ic { transform:rotate(180deg); }
+.fridge-body { padding:0 16px 16px; }
+.fridge form>label { display:block; margin:4px 0 8px; font-size:.8125rem; }
+.fridge-add { display:flex; gap:8px; }
+.fridge-add input { min-width:0; flex:1; }
+.fridge-add .btn { flex:none; padding-inline:12px; }
+.fridge-list { list-style:none; padding:0; margin:16px 0; }
+.fridge-list li { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:9px 0; border-bottom:1px solid var(--line); }
+.fridge-list li>span { min-width:0; overflow-wrap:anywhere; }
+.fridge-list .ic { transform:rotate(45deg); }
+.fridge .field { margin-top:8px; padding-bottom:0; border-bottom:0; }
+.fridge-empty { margin-block:14px; }
+:root[data-theme="garden"] .fridge { --fg:#163b29; --muted:#56644f; --line:#b9c29d; --surface:#fffdf8; --surface2:#e6e9d4; --field-bg:#f4f0de; --gold:#18583e; --color-focus:#836421; color:var(--fg); background:var(--paper-fill); border-color:#b6bd92; box-shadow:var(--card-shadow); color-scheme:light; }
+:root[data-theme="garden"] #app { padding-inline:10px; }
+:root[data-theme="garden"] .feed { padding-inline:8px; max-width:620px; }
+:root[data-theme="garden"] .panel { padding-inline:16px; }
+:root[data-theme="garden"] .nutrient { padding:14px; }
+@media (min-width:860px) {
+  :root[data-theme="garden"] #app { max-width:1240px; padding-inline:24px; }
+}
+@media (max-height:600px) and (min-width:600px) {
+  :root[data-theme="garden"] .feed { max-width:1100px; }
+  .dcard .dc-content { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); align-items:start; }
+  :root[data-theme="garden"] .dcard .dc-hero { padding:8px; }
+  :root[data-theme="garden"] .dcard .feed-photo { height:auto; aspect-ratio:3/4; }
+  :root[data-theme="garden"] .dcard .dc-head { padding:10px; }
+  :root[data-theme="garden"] .dcard .dc-body { padding:8px; }
+}
+@media (max-width:359px) {
+  .fridge-add { flex-wrap:wrap; }
+  .fridge-add input { flex-basis:100%; }
+  .fridge-add .btn { width:100%; }
+}
+
+:root[data-theme="garden"] .deck .dcard:not(.under) { display:flex; flex-direction:column; }
+
+:root[data-theme="garden"] #app { max-width:1240px; }
+@media (max-width:859px) {
+  :root[data-theme="garden"] .feed { max-width:none; }
+}
+@media (min-width:860px) {
+  :root[data-theme="garden"] #view[data-page="settings"] { max-width:none; }
+  :root[data-theme="garden"] .feed { max-width:1100px; }
+  .dcard .dc-content { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); align-items:start; }
+}
+
+.fridge>summary::after { content:none!important; }
+.dcard .csteps { padding-left:2em; }
+
+@media (max-width:859px) { :root[data-theme="garden"] .sheet-card { padding-inline:12px; } }
+
 </style>
 </head><body>
 <a class="skip-link" href="#view">К содержимому</a>
@@ -1255,9 +1335,9 @@ body.empty-stream, body.empty-stream #scroller, body.empty-stream #view { backgr
 <nav id="nav" aria-label="Разделы"><div></div></nav>
 <div id="sheet" hidden><div class="sheet-card" role="dialog" aria-modal="true" tabindex="-1"><div class="sheet-grip"><button class="btn ghost sm" id="sheet-close">Закрыть</button></div><div id="sheet-body"></div></div></div>
 <div id="toast" role="status" hidden></div>
-<script src="data.js?v=1795538630"></script>
-<script src="nutrition-data.js?v=1795538630"></script>
-<script src="analytics.js?v=1795538630"></script>
-<script src="app.js?v=1795538630"></script>
+<script src="data.js?v=1795539558"></script>
+<script src="nutrition-data.js?v=1795539558"></script>
+<script src="analytics.js?v=1795539558"></script>
+<script src="app.js?v=1795539558"></script>
 </body>
 </html>
