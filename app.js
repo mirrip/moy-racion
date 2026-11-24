@@ -489,8 +489,10 @@ function pickNewLocal(ctx, relaxed) {
   noTaste = !!(S.collect.otherCuisines && !relaxed); try { return rank(pool, ctx)[0] || null; } finally { noTaste = false; }
 }
 async function pickNew(ctx) { // запас с сервера — мгновенно; пуст — один запрос к серверу
-  if (Server.on()) { const d = poolPick(ctx) || await serverNew(ctx); if (d) return d; }
-  return pickNewLocal(ctx) || pickNewLocal(ctx, true) || pickNewLocal(ctx, 'section') || pickNewLocal(ctx, 'repeat');
+  const cached = (Server.on() && poolPick(ctx, !!S.feed?.accessPending)) || pickNewLocal(ctx) || pickNewLocal(ctx, true) || pickNewLocal(ctx, 'section') || pickNewLocal(ctx, 'repeat');
+  if (cached) return cached;
+  if (Server.on() && !S.feed?.accessPending) return await serverNew(ctx);
+  return null;
 }
 const feedCtx = (day, slot) => { const F = S.feed, key = day + '-' + slot; return {day, slot, type: pattern()[slot][0], tg: slotTarget(day, slot), seen: new Set(F.seen[key] || [])}; };
 async function nextCard() {
@@ -513,10 +515,11 @@ async function nextCard() {
     for (const s of seq) { dish = s === 'new' ? await pickNew(ctx) : pickCircle(s, ctx); if (dish) { src = s; break; } }
   }
   if (!dish) { dish = rank([...Object.values(DBMAP), ...Object.values(S.dishStore).filter(d => d.src === 'server')].filter(d => fitsSlot(d, ctx, 'repeat')), ctx)[0] || null; src = 'main'; } // И2: повтор блюда (в т. ч. из кругов) лучше пустого приёма
-  if (!dish && Server.on()) { dish = await serverLast(ctx); src = 'new'; } // пустой приём недопустим: последний шанс — сервер
+  if (!dish && Server.on() && !F.accessPending) { dish = await serverLast(ctx); src = 'new'; } // пустой приём недопустим: последний шанс — сервер
+  if (S.feed !== F || !F.active) return;
   F.card = dish ? {dish, src} : null;
-  if (dish) { F.seen[key].push(dish.id); rememberDish(dish); peekNext(dish); }
-  save();
+  if (dish) { if (!F.accessPending) F.seen[key].push(dish.id); rememberDish(dish); if (!F.accessPending) peekNext(dish); }
+  if (S.feed === F && F.active) save();
 }
 function nextEmptyAfter(day, slot) { // приём, на который перейдёт подбор после «Взять»
   for (let k = 0; k < S.plan.len; k++) { const d = (day + k) % S.plan.len; for (let i = 0; i < S.plan.meals; i++) if (!S.plan.days[d].slots[i] && !(d === day && i === slot)) return [d, i]; }
@@ -742,7 +745,6 @@ function toast(t) { const el = $('#toast'); el.textContent = t; el.hidden = fals
 function sheet(html, onMount, opts = {}) {
   closeSheet.after = opts.onClose || null;
   const el = $('#sheet'), card = $('.sheet-card');
-  const opening = el.hidden;
   if (el.hidden) sheet.returnFocus = document.activeElement;
   el.classList.toggle('full', !!opts.full); el.classList.remove('pulling'); card.style.transform = '';
   $('#sheet-body').innerHTML = html; el.hidden = false; $('#sheet-body').scrollTop = 0; document.body.classList.add('sheeted'); onMount && onMount($('#sheet-body'));
@@ -752,35 +754,20 @@ function sheet(html, onMount, opts = {}) {
   if (title) { title.id = title.id || 'sheet-heading'; card.setAttribute('aria-labelledby', title.id); }
   else card.setAttribute('aria-label', 'Мой рацион');
   if (!card.contains(document.activeElement)) card.focus({preventScroll: true});
-  if (opening) {
-    animateSurface(card);
-    if (el.animate && !window.matchMedia('(prefers-reduced-motion: reduce)').matches)
-      el.animate([{opacity:0},{opacity:1}], {duration:260,easing:'ease-out'});
-  }
+  const notice = $('#toast'); if (notice) notice.hidden = true;
 }
 const closeSheet = () => {
   if ($('#sheet').hidden) return;
   const after = closeSheet.after, opener = sheet.returnFocus;
-  if (typeof window !== 'undefined' && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-    const card = $('.sheet-card'), rect = card.getBoundingClientRect(), ghost = card.cloneNode(true), style = getComputedStyle(card);
-    const sourceBody = $('#sheet-body'), ghostBody = ghost.querySelector('#sheet-body'), bodyStyle = getComputedStyle(sourceBody);
-    ghostBody.classList.add('sheet-exit-body'); ghostBody.scrollTop = sourceBody.scrollTop;
-    for (const key of ['display','gap','alignContent','padding','overflowY','minHeight']) ghostBody.style[key] = bodyStyle[key];
-    ghost.querySelectorAll('[id]').forEach(el => el.removeAttribute('id')); ghost.removeAttribute('id'); ghost.removeAttribute('role'); ghost.removeAttribute('aria-modal'); ghost.inert = true; ghost.setAttribute('aria-hidden','true'); ghost.classList.add('sheet-exit');
-    const backdrop = document.createElement('div'), surface = getComputedStyle($('#sheet'));
-    backdrop.inert = true; backdrop.setAttribute('aria-hidden','true');
-    Object.assign(backdrop.style,{position:'fixed',inset:'0',zIndex:'28',pointerEvents:'none',background:surface.backgroundColor,backdropFilter:surface.backdropFilter});
-    document.body.append(backdrop);
-    backdrop.animate([{opacity:1},{opacity:0}],{duration:180,easing:'ease-out'}).finished.catch(() => {}).finally(() => backdrop.remove());
-    Object.assign(ghost.style,{position:'fixed',left:rect.left+'px',top:rect.top+'px',width:rect.width+'px',height:rect.height+'px',maxHeight:'none',maxWidth:'none',padding:style.padding,borderRadius:style.borderRadius,margin:'0',zIndex:'29',pointerEvents:'none'});
-    document.body.append(ghost); ghostBody.scrollTop = sourceBody.scrollTop;
-    const animation = animateSurface(ghost, true); if (animation) animation.finished.catch(() => {}).finally(() => ghost.remove()); else ghost.remove();
-  }
   closeSheet.after = null; sheet.returnFocus = null; $('#sheet').hidden = true; document.body.classList.remove('sheeted');
   $('#scroller').inert = false; $('#nav').inert = false;
   if (opener?.isConnected) opener.focus({preventScroll: true});
   if (after) after();
 };
+document.addEventListener('click', e => {
+  if (e.target.closest('.analytics-filter')) return;
+  document.querySelectorAll('.filter-menu').forEach(menu => { menu.hidden = true; document.querySelector(`[aria-controls="${menu.id}"]`)?.setAttribute('aria-expanded','false'); });
+});
 document.addEventListener('keydown', e => {
   if (e.key !== 'Tab' || $('#sheet').hidden) return;
   const card = $('.sheet-card'), items = [...card.querySelectorAll('button:not(:disabled),a[href],input:not(:disabled),select:not(:disabled),textarea:not(:disabled),[tabindex="0"]')].filter(el => el.getClientRects().length);
@@ -849,10 +836,6 @@ function bindSurfaceLight() {
   header.onpointerleave = reset;
 }
 
-function animateSurface(element, closing = false) {
-  if (!element?.animate || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-  return element.animate(closing ? [{opacity:1,transform:'translateY(0)'},{opacity:0,transform:'translateY(12px)'}] : [{opacity:0,transform:'translateY(12px)'},{opacity:1,transform:'translateY(0)'}], {duration:closing ? 180 : 380,easing:'cubic-bezier(.22,.75,.24,1)'});
-}
 let lastView = '';
 function render() {
   applyTheme(); rollWeek();
@@ -871,7 +854,6 @@ function render() {
   document.body.classList.toggle('empty-stream', S.ui.tab === 'stream');
   ({plan: viewPlan, stream: viewStream, analytics: viewAnalytics, collect: viewCollect, shop: viewShop, settings: viewSettings}[S.ui.tab] || viewPlan)();
   bindSurfaceLight();
-  if (changed) animateSurface(v);
 }
 
 /* ---------- Онбординг / форма человека ---------- */
@@ -1067,7 +1049,7 @@ function mealCard(day, i, m) {
   if (sl.unsafe) return `<article class="meal unsafe"><p class="mtype">${m[1]}</p><p class="mname">${esc(d.name)}</p><p class="hint">Это блюдо нужно заменить</p><button class="btn primary" data-replace="${day}:${i}">Заменить блюдо</button></article>`;
   return `<article class="meal${sl.status ? ' st-' + sl.status : ''}">
    <button class="mhead" data-meal="${day}:${i}" aria-haspopup="dialog"><span class="mgo" aria-hidden="true">›</span>
-     ${dishPhoto(d) ? `<img class="meal-photo" src="${esc(dishPhoto(d))}" width="640" height="360" alt="" loading="lazy" onerror="this.hidden=true">` : ''}
+     ${dishVisual(d, 'meal-photo')}
      <span class="mtype">${m[1]}${sl.status === 'eaten' ? ' · съедено' : sl.status === 'skipped' ? ' · пропущено' : ''}</span>
      <span class="mname">${esc(d.name)}</span>
      <span class="macro">${kbju(n)}</span>
@@ -1101,7 +1083,7 @@ function mealPage(day, i) { // блюдо — отдельное полноэк�
   const dt = new Date(addDays(S.plan.start, day) + 'T12:00:00'), fs = slotFactor(d, i), tot = fs.reduce((a, b) => a + b, 0), base = nut(d);
   sheet(`<p class="eyebrow">${m[1]} · ${DOW[dt.getDay()]}, ${dt.getDate()} ${MON[dt.getMonth()]}${sl.status === 'eaten' ? ' · съедено' : sl.status === 'skipped' ? ' · пропущено' : ''}</p>
    <h2 class="pg-title">${esc(d.name)}</h2>
-   ${dishPhoto(d) ? `<img class="recipe-photo" src="${esc(dishPhoto(d))}" width="640" height="400" alt="" onerror="this.hidden=true">` : ''}
+   ${dishVisual(d, 'recipe-photo')}
    <div class="grid4"><div><b>${r0(n.kcal)}</b><span>ккал</span></div><div><b>${r0(n.p)}</b><span>белки, г</span></div><div><b>${r0(n.f)}</b><span>жиры, г</span></div><div><b>${r0(n.c)}</b><span>углеводы, г</span></div></div>
    <div class="facts"><div><em>Готовка</em><b>${d.time} мин</b></div><div><em>Стоимость</em><b>≈ ${r0(famCost(d) / 10) * 10} ₽</b></div></div>
    ${S.marks.notes[d.id] ? `<p class="note">${ic('heart', 'sm')} ${esc(S.marks.notes[d.id])}</p>` : ''}
@@ -1175,6 +1157,7 @@ function nutrientCalendar(id, pid = 'all') {
   const today = iso(new Date()), menu = analyticsMenuDays(), until = Object.keys(menu).sort().slice(-1)[0] || today;
   const currentMonth = (until > today ? until : today).slice(0, 7);
   const history = RacionAnalytics.history(menu, until, pid);
+  const notes = [...new Set(Object.values(menu).flatMap(day => Object.entries(day.people || {}).filter(([key]) => pid === 'all' || key === pid).map(([,p]) => p.limits?.[id]?.note)).filter(Boolean))];
   const firstMonth = history.first?.slice(0, 7) || currentMonth;
   let month = S.ui.nutrientMonth || currentMonth;
   if (!/^\d{4}-\d{2}$/.test(month) || month < firstMonth || month > currentMonth) month = currentMonth;
@@ -1212,6 +1195,7 @@ function nutrientCalendar(id, pid = 'all') {
         <div class="nutrient-calendar-grid" aria-label="Дни месяца">${cells}</div>
         <div class="calendar-legend"><span><i class="day-normal"></i>Норма</span><span><i class="day-low"></i>Недостаток</span><span><i class="day-high"></i>Избыток</span><span><i class="day-empty"></i>Нет данных / оценки</span></div>
         <section class="calendar-detail" aria-live="polite"><h3>${dateLabel(selectedDate)}</h3>${selectedDate > today ? '<p class="hint">Запланированный рацион · будущий день</p>' : ''}${detail}</section>
+        <details class="nutrient-notes"><summary>О показателе и границах нормы</summary><p>Ориентиры учитывают выбранного человека или каждого участника семьи. Нижняя и верхняя границы имеют разный смысл; отсутствие верхней границы не означает, что любое количество полезно.</p>${notes.map(note => `<p>${esc(note)}</p>`).join('')}<p>Ориентиры взяты из отчётов проекта. Пределы только для добавок не применяются к обычной пище; для старой истории сохраняются прежние ориентиры. Это справочная оценка меню, а не диагноз.</p></details>
         <p class="hint calendar-footnote">Это состав сохранённого меню, а не подтверждение съеденного. Серые дни — нет записей, полной информации или отдельной нормы. История хранится на этом устройстве.</p>`;
       const move = offset => {
         const date = new Date(month + '-01T12:00:00'); date.setMonth(date.getMonth() + offset); month = iso(date).slice(0, 7);
@@ -1263,26 +1247,32 @@ function viewAnalytics() {
       <div class="range-bounds"><span>${minimum}</span><span>${maximum}</span></div>
       ${shortfall ? `<p class="nutrient-status">${shortfall}</p>` : ''}
       ${above ? `<p class="range-alert">Превышения дневной границы: ${Object.keys(alert.dates).length} ${ruDays(Object.keys(alert.dates).length)}${selected === 'all' ? ` · ${esc(names)}` : ''}. Они не компенсируются другими днями.</p>` : ''}
-      ${range.note ? `<p class="nutrient-status">${esc(range.note)}</p>` : ''}
-      ${r.max == null && n.group === 'amino' && r.min != null ? '<p class="nutrient-status">Верхний предел для этой аминокислоты в отчёте не установлен.</p>' : ''}</article>`;
+      <span class="nutrient-detail-link">Календарь и примечания ${ic('chev')}</span></article>`;
   };
   $('#view').innerHTML = `${appbar('Аналитика', 'Питание в цифрах')}
     <div class="analytics-controls">
-      <div class="analytics-period"><span class="filter-caption">Дни рациона</span><div class="period-switch" role="group" aria-label="Период аналитики">${[['week','7 дней'],['month','30 дней'],['all','Всё время']].map(([key,label]) => `<button data-period="${key}" aria-pressed="${period === key}">${label}</button>`).join('')}</div></div>
-      <button class="analytics-person" id="a-person-open" aria-haspopup="dialog"><span class="person-medallion" aria-hidden="true">${selected === 'all' ? ic('family') : esc((people[selected] || ' ')[0])}</span><span><small>Для кого</small><b>${selected === 'all' ? 'Вся семья' : esc(people[selected])}</b></span>${ic('down')}</button>
+      <div class="analytics-filter"><span class="filter-caption">Период</span><button class="filter-trigger" id="a-period-open" aria-expanded="false" aria-controls="a-period-menu"><span>${period === 'week' ? '7 дней' : period === 'month' ? '30 дней' : 'Всё время'}</span>${ic('down')}</button><div id="a-period-menu" class="filter-menu" hidden role="group" aria-label="Период аналитики">${[['week','7 дней рациона'],['month','30 дней рациона'],['all','За всё время']].map(([key,label]) => `<button data-period="${key}" aria-pressed="${period === key}">${label}<span aria-hidden="true">${period === key ? '✓' : ''}</span></button>`).join('')}</div></div>
+      <div class="analytics-filter"><span class="filter-caption">Кто ест</span><button class="filter-trigger" id="a-person-open" aria-expanded="false" aria-controls="a-person-menu"><span>${selected === 'all' ? 'Вся семья' : esc(people[selected])}</span>${ic('down')}</button><div id="a-person-menu" class="filter-menu" hidden role="group" aria-label="Участник семьи">${[['all','Вся семья'],...Object.entries(people)].map(([id,name]) => `<button data-analytics-person="${esc(id)}" aria-pressed="${id === selected}">${esc(name)}<span aria-hidden="true">${id === selected ? '✓' : ''}</span></button>`).join('')}</div></div>
     </div>
     <section class="analytics-summary"><b>${a.days}</b><div>${ruDays(a.days)} собранного рациона<p>${period === 'all' ? 'За всё время использования' : period === 'week' ? 'Последние 7 дней рациона' : 'Последние 30 дней рациона'}</p></div></section>
-    <div class="analytics-history"><strong>${since ? 'История с ' + since : 'История ещё не началась'}</strong><span>${history.days} ${ruDays(history.days)} с записями за всё время${selected === 'all' ? ' · семья' : ' · ' + esc(people[selected])}</span><small>${partial ? `Частично заполнены: ${partial}. ` : ''}Учтены и будущие дни меню; пустые дни исключены. История хранится на этом устройстве.</small></div>
-    ${history.days < 30 ? `<aside class="analytics-caution" role="note"><strong>Пока недостаточно истории</strong><p>В сводке: ${history.days} ${ruDays(history.days)} с данными из 30. Это предварительная сводка собранного меню, включая запланированные дни. Менее 30 дней не дают устойчивой картины. Даже после 30 дней состав меню не подтверждает, что всё было съедено.</p></aside>` : ''}
-    <details class="analytics-method"><summary>Как считаются показатели</summary><p class="hint analytics-note">По дням собранного рациона, включая будущие даты и неотмеченные приёмы. Период выбирает последние 7 или 30 заполненных дат меню, а не прошедшие календарные дни. Частично заполненный день учитывается, но его полный дневной ориентир не уменьшается — дополните меню перед оценкой. Пропущенные блюда исключены. Это состав меню, а не подтверждение съеденного. Границы суммируются за дни с данными, с учётом норм каждого человека. 100% потребности не означает верхний предел.</p></details>
+    <div class="analytics-history"><strong>${since ? 'Меню с ' + since : 'История ещё не началась'}</strong><span>${history.days} ${ruDays(history.days)} с записями${selected === 'all' ? ' · семья' : ' · ' + esc(people[selected])}${partial ? ` · неполных: ${partial}` : ''}</span></div>
+    ${history.days < 30 ? `<aside class="analytics-caution" role="note"><div class="caution-heading"><strong>Предварительная сводка</strong><span class="history-counter">${history.days} / 30 дней</span></div><p>Менее 30 дней меню — пока недостаточно для устойчивой картины питания.</p><details><summary>Подробнее об оценке</summary><p>Учтено ${history.days} ${ruDays(history.days)} собранного рациона, включая будущие даты. Это состав меню, а не подтверждение съеденного. Даже 30 дней не подтверждают фактическое потребление.</p></details></aside>` : ''}
+    <details class="analytics-method"><summary>Как считаются показатели</summary><p class="hint analytics-note">По дням собранного рациона, включая будущие даты и неотмеченные приёмы. Период выбирает последние 7 или 30 заполненных дат меню, а не прошедшие календарные дни. История хранится на этом устройстве; пустые дни исключены. Частично заполненный день учитывается, но его полный дневной ориентир не уменьшается — дополните меню перед оценкой. Пропущенные блюда исключены. Это состав меню, а не подтверждение съеденного. Границы суммируются за дни с данными, с учётом норм каждого человека. 100% потребности не означает верхний предел.</p></details>
     ${!a.days ? `<div class="empty"><h3>${selected === 'all' ? 'Здесь появится ваша аналитика' : esc(people[selected]) + ': пока нет данных'}</h3><p>За выбранный период нет сохранённого рациона. Нули не считаются недостатком.</p></div>` : groups.map(([g, title]) => `<section class="nutrient-group"><h3>${title}</h3>${RacionAnalytics.ordered(RacionAnalytics.data.nutrients.filter(n => n.group === g), a.ranges).map(card).join('')}</section>`).join('')}
-    <p class="hint analytics-note">Верхние границы — из отчётов проекта, система NASEM; рабочие коридоры отмечены отдельно. Пределы только для добавок не применяются к обычной пище. Отсутствие верхней границы не означает, что любое количество полезно. Старая история сохраняет прежние ориентиры; возрастные пределы без исторических данных не выдумываются. Аналитика не ставит диагноз.</p>`;
+    `;
   $('#view').querySelectorAll('[data-nutrient]').forEach(el => {
     const open = () => nutrientCalendar(el.dataset.nutrient, selected);
     el.onclick = open; el.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } };
   });
-  $('#view').querySelectorAll('[data-period]').forEach(button => button.onclick = () => { S.ui.analyticsPeriod = button.dataset.period; save(); render(); $(`[data-period="${S.ui.analyticsPeriod}"]`).focus({preventScroll:true}); });
-  $('#a-person-open').onclick = () => sheet(`<p class="eyebrow">Аналитика семьи</p><h2>Чьи показатели посмотреть?</h2><div class="analytics-people-list">${[['all','Вся семья'],...Object.entries(people)].map(([id,name]) => `<button class="person-choice${id === selected ? ' on' : ''}" data-person="${esc(id)}" aria-pressed="${id === selected}"><span class="person-medallion" aria-hidden="true">${id === 'all' ? ic('family') : esc(name[0])}</span><span><b>${esc(name)}</b><small>${id === 'all' ? 'Каждый участник с учётом своих норм' : 'Личные нормы и состав меню'}</small></span><span aria-hidden="true">${id === selected ? '✓' : '›'}</span></button>`).join('')}</div>`, body => body.querySelectorAll('[data-person]').forEach(button => button.onclick = () => { S.ui.analyticsPerson = button.dataset.person; closeSheet(); save(); render(); $('#a-person-open').focus({preventScroll:true}); }));
+  const filters = [['a-period-open','a-period-menu'],['a-person-open','a-person-menu']];
+  filters.forEach(([triggerId,menuId]) => {
+    const trigger = $('#' + triggerId), menu = $('#' + menuId);
+    trigger.onclick = () => { const open = menu.hidden; filters.forEach(([t,m]) => { $('#' + m).hidden = true; $('#' + t).setAttribute('aria-expanded','false'); }); menu.hidden = !open; trigger.setAttribute('aria-expanded',String(open)); };
+    trigger.onkeydown = e => { if (e.key === 'ArrowDown') { e.preventDefault(); if (menu.hidden) trigger.click(); menu.querySelector('button')?.focus(); } };
+    trigger.closest('.analytics-filter').onkeydown = e => { if (e.key === 'Escape') { menu.hidden = true; trigger.setAttribute('aria-expanded','false'); trigger.focus(); e.stopPropagation(); } };
+  });
+  $('#view').querySelectorAll('[data-period]').forEach(button => button.onclick = () => { S.ui.analyticsPeriod = button.dataset.period; save(); render(); $('#a-period-open').focus({preventScroll:true}); });
+  $('#view').querySelectorAll('[data-analytics-person]').forEach(button => button.onclick = () => { S.ui.analyticsPerson = button.dataset.analyticsPerson; save(); render(); $('#a-person-open').focus({preventScroll:true}); });
 }
 
 /* ---------- Сбор рациона ---------- */
@@ -1316,7 +1306,7 @@ function viewCollect() {
     <div class="panel gap collect-options"><div class="field switch">${ic('shop')}<span><em>Есть продукты дома</em><small>Блюда из них — в ближайшие дни</small></span><button class="tog${c.homeOn ? ' on' : ''}" id="c-home-tog" role="switch" aria-checked="${c.homeOn}" aria-label="Есть продукты дома"><i></i></button></div>
     ${c.homeOn ? `<div class="field col"><div class="chipin"><input id="c-home" placeholder="Например, гречка"><button class="btn ghost sm" id="c-home-add">Добавить</button></div><div class="chips">${c.home.map((n, i) => `<button class="chip x" data-rmhome="${i}">${esc(n)}</button>`).join('')}</div></div>` : ''}
     <div class="field switch">${ic('dish')}<span><em>Готовить на 2 дня</em><small>Обед и ужин — одной готовкой</small></span><button class="tog${c.cook2 ? ' on' : ''}" id="c-cook2" role="switch" aria-checked="${c.cook2}" aria-label="Готовить на 2 дня"><i></i></button></div>
-    <div class="field switch">${ic('leaf')}<span><em>Другие кухни</em><small>Новые блюда — из кухонь, которые вы выбираете реже</small></span><button class="tog${c.otherCuisines ? ' on' : ''}" id="c-other" role="switch" aria-checked="${!!c.otherCuisines}" aria-label="Другие кухни"><i></i></button></div></div>`;
+    </div>`;
   const v = $('#view');
   if (busy) { v.querySelectorAll('input, select, button').forEach(b => b.disabled = b.id !== 'c-auto-stop'); $('#c-auto-stop').onclick = () => { autoRun.cancelled = true; $('#c-auto-stop').disabled = true; }; return; }
   v.querySelectorAll('[data-sec]').forEach(b => b.onclick = () => { const slot = +b.dataset.slot, sec = +b.dataset.sec, arr = secs(slot);
@@ -1325,7 +1315,7 @@ function viewCollect() {
   $('#c-budget').onchange = e => { c.budget = Math.max(0, +e.target.value || 0); save(); render(); };
   $('#c-wish').oninput = e => { S.ui.wishName = e.target.value; };
   $('#c-wish-slot').onchange = e => { S.ui.wishType = e.target.value; save(); };
-  v.querySelectorAll('[data-wish-date]').forEach(b => b.onclick = () => { const date = b.dataset.wishDate; S.ui.wishDates = selectedDates.includes(date) ? selectedDates.filter(x => x !== date) : [...selectedDates, date].sort(); save(); render(); });
+  v.querySelectorAll('[data-wish-date]').forEach(b => b.onclick = () => { const date = b.dataset.wishDate, position = $('.wish-calendar').scrollLeft; S.ui.wishDates = selectedDates.includes(date) ? selectedDates.filter(x => x !== date) : [...selectedDates, date].sort(); save(); render(); $('.wish-calendar').scrollLeft = position; $(`[data-wish-date="${date}"]`).focus({preventScroll:true}); });
   $('#wish-clear').onclick = () => { S.ui.wishDates = []; save(); render(); };
   const wish = () => addDesired($('#c-wish').value.trim(), $('#c-wish-slot').value, S.ui.wishDates || []);
   $('#c-wish-add').onclick = wish; $('#c-wish').onkeydown = e => { if (e.key === 'Enter') wish(); };
@@ -1333,7 +1323,11 @@ function viewCollect() {
   $('#c-go').onclick = startCollect; $('#c-auto').onclick = autoCollect;
   $('#c-home-tog').onclick = () => { c.homeOn = !c.homeOn; save(); render(); };
   if (c.homeOn) { const add = () => { const n = $('#c-home').value.trim(); if (n && !c.home.includes(n)) c.home.push(n); save(); render(); }; $('#c-home-add').onclick = add; $('#c-home').onkeydown = e => { if (e.key === 'Enter') add(); }; v.querySelectorAll('[data-rmhome]').forEach(b => b.onclick = () => { c.home.splice(+b.dataset.rmhome, 1); save(); render(); }); }
-  $('#c-cook2').onclick = () => { c.cook2 = !c.cook2; save(); render(); }; $('#c-other').onclick = () => { c.otherCuisines = !c.otherCuisines; save(); render(); };
+  $('#c-cook2').onclick = () => { c.cook2 = !c.cook2; save(); render(); };
+}
+function dishVisual(d, cls) {
+  const photo = dishPhoto(d);
+  return `<div class="dish-visual ${cls}"><span class="dish-photo-placeholder" aria-hidden="true">${ic('dish')}<small>Фото блюда</small></span>${photo ? `<img src="${esc(photo)}" width="640" height="400" alt="" loading="lazy" onerror="this.remove()">` : ''}</div>`;
 }
 function dishPhoto(d) {
   if (!d || typeof TT_SET === 'undefined') return '';
@@ -1463,16 +1457,33 @@ async function addDesired(name, type, dates = []) {
   toast(added ? `«${name}»: добавлено на ${added} ${ruDays(added)}${omitted ? '. Не все выбранные даты доступны.' : ''}` : lastError || 'Такого блюда пока нет в базе.');
 }
 async function startCollect() {
-  if (autoRun || Object.values(S.settings.medical).some(Boolean)) return;
+  if (S.feed?.active || autoRun || Object.values(S.settings.medical).some(Boolean)) return;
   if (!S.plan) newPlan();
   const first = firstEmpty();
   if (!first) { S.ui.tab = 'plan'; save(); render(); toast('Рацион уже собран. Заменить блюдо можно в разделе «Рацион».'); return; }
-  if (Server.on()) {
-    try { await checkKey(); }                                                   // сбор — только после ответа сервера «ключ действует»
-    catch (e) { accessSheet(KEY_ERRORS.includes(e.code) ? e.code : 'net', () => startCollect(), e.code === 'net' ? 'Нет связи с сервером. Сбор начнётся, когда сервер подтвердит ключ.' : e.message); return; }
-  }
   S.firstCollect = S.firstCollect || iso(new Date());
-  startFeed(first[0], first[1], false);
+  if (!Server.on()) return startFeed(first[0], first[1], false);
+  const opening = startFeed(first[0], first[1], false, true);
+  return authorizeFeed(S.feed, opening);
+}
+async function authorizeFeed(F, opening = Promise.resolve()) {
+  try {
+    if (Server.on()) await checkKey();
+    await opening;
+    if (S.feed !== F || !F.active) return;
+    F.accessPending = false;
+    if (!F.card) await withLoading(nextCard);
+    else {
+      const key = F.day + '-' + F.slot; poolTake(F.card.dish.id, feedCtx(F.day, F.slot));
+      if (!F.seen[key].includes(F.card.dish.id)) F.seen[key].push(F.card.dish.id);
+      peekNext(F.card.dish); render();
+    }
+    save(); prepareFeedBackground(F);
+  } catch (e) {
+    if (S.feed !== F || !F.active) return;
+    F.active = false; F.accessPending = false; S.ui.tab = 'collect'; save(); render();
+    accessSheet(KEY_ERRORS.includes(e.code) ? e.code : 'net', () => startCollect(), e.code === 'net' ? 'Нет связи с сервером. Добавление блюд доступно после проверки ключа.' : e.message);
+  }
 }
 function accessSheet(code, retry, msg) {
   const st = S.settings, bot = st.botUrl || 'https://t.me/';
@@ -1490,17 +1501,28 @@ function firstEmpty(fromDay = 0) {
   return null;
 }
 const CARD_LIMIT = 15;
-async function startFeed(day, slot, manual) {
+async function startFeed(day, slot, manual, accessPending = false) {
   if (autoRun || Object.values(S.settings.medical).some(Boolean)) return;
-  S.feed = Object.assign({v4: true, seen: {}, used: {}, counter: 0, homeQueue: []}, S.feed && S.feed.v4 ? S.feed : {}, {active: true, day, slot, manual, card: null, peek: null, loading: false, exhausted: false, aiWarned: false});
-  poolFill();
-  if (S.collect.homeOn && S.collect.home.length && Server.on() && S.plan.homeFor !== S.collect.home.join('|')) {
-    S.plan.homeFor = S.collect.home.join('|'); S.feed.loading = true; render();
-    for (const si of pattern().map((m, i) => i).filter(i => 'ld'.includes(pattern()[i][0])).slice(0, 2)) {
-      try { const ctx = {day: 0, slot: si, type: pattern()[si][0], tg: slotTarget(0, si), seen: S.feed.homeQueue.map(x => x.id)}; (await fetchDishes(ctx, {home: S.collect.home, count: 1})).forEach(d => { if (allowedByDiet(d)) S.feed.homeQueue.push(d); }); } catch (e) { noteServerError(e); break; }
-    }
-  }
+  S.feed = Object.assign({v4: true, seen: {}, used: {}, counter: 0, homeQueue: []}, S.feed && S.feed.v4 ? S.feed : {}, {active: true, day, slot, manual, card: null, peek: null, loading: true, exhausted: false, aiWarned: false, accessPending});
+  const F = S.feed;
+  render();
   await withLoading(nextCard);
+  if (S.feed === F && F.active && !accessPending) prepareFeedBackground(F);
+}
+function prepareFeedBackground(F) {
+  poolFill();
+  if (!S.collect.homeOn || !S.collect.home.length || !Server.on() || S.plan.homeFor === S.collect.home.join('|')) return;
+  const plan = S.plan, home = [...S.collect.home]; plan.homeFor = home.join('|');
+  (async () => {
+    for (const si of pattern().map((m, i) => i).filter(i => 'ld'.includes(pattern()[i][0])).slice(0, 2)) {
+      if (S.feed !== F || !F.active || S.plan !== plan) return;
+      try {
+        const ctx = {day: 0, slot: si, type: pattern()[si][0], tg: slotTarget(0, si), seen: F.homeQueue.map(x => x.id)};
+        const dishes = await fetchDishes(ctx, {home, count: 1});
+        if (S.feed === F && F.active && S.plan === plan) dishes.forEach(d => { if (allowedByDiet(d)) F.homeQueue.push(d); });
+      } catch (e) { noteServerError(e); break; }
+    }
+  })();
 }
 
 /* ---------- Лента карточек (как в знакомствах) ---------- */
@@ -1534,7 +1556,7 @@ function viewFeed() {
   const dt = new Date(addDays(S.plan.start, F.day) + 'T12:00:00'), taken = S.plan.days[F.day].slots;
   const total = S.plan.len * S.plan.meals, done = allSlots().length;
   let card;
-  if (F.loading) card = `<article class="dcard skel"><div class="dc-hero"><div class="plate"><i></i></div><div class="dc-head"><div class="dc-tags"><span>${m[1]}</span></div><span class="sk w70"></span></div></div><div class="dc-body"><span class="sk w90"></span><span class="sk w40"></span><span class="sk w90"></span><span class="sk w70"></span><p class="hint">Подбираю блюдо под нормы дня…</p></div></article>`;
+  if (F.loading || (F.accessPending && !F.card)) card = `<article class="dcard skel"><div class="dc-hero"><div class="plate"><i></i></div><div class="dc-head"><div class="dc-tags"><span>${m[1]}</span></div><span class="sk w70"></span></div></div><div class="dc-body"><span class="sk w90"></span><span class="sk w40"></span><span class="sk w90"></span><span class="sk w70"></span><p class="hint">Подбираю блюдо под нормы дня…</p></div></article>`;
   else if (F.exhausted || !F.card) card = `<article class="dcard end"><div class="dc-body"><p class="eyebrow">${m[1]}</p><h3>${F.exhausted ? 'Карточки для этого приёма закончились' : 'Подходящих блюд больше нет'}</h3><p class="hint">Выберите из показанных или добавьте сложность и бюджет в разделе «Сбор».</p><div class="actions"><button class="btn primary" id="f-pick">Выбрать из показанных</button></div></div></article>`;
   else card = cardHtml(F.card.dish, m, F.slot);
   const pd = !F.loading && F.card && F.peek ? getDish(F.peek.id) : null, under = pd ? cardHtml(pd, pat[F.peek.slot], F.peek.slot, true) : '<div class="ghostcard g1"></div>';
@@ -1545,7 +1567,7 @@ function viewFeed() {
     <button class="fb fb-mark" id="f-mark" aria-label="Пометка">${fic('mark')}<span>Пометка</span></button>
     <button class="fb fb-take" id="f-take" aria-label="Взять">${fic('take')}<span>Взять</span></button>
    </div>
-   <p class="gest"><span>← пропуск</span><span>взять →</span><span>↑ пометка</span><span>↓ свернуть</span></p></footer>`;
+   ${F.accessPending ? '<p class="feed-access-status" role="status">Проверяем доступ</p>' : ''}<p class="gest"><span>← пропуск</span><span>взять →</span><span>↑ пометка</span><span>↓ свернуть</span></p></footer>`;
   return `<section class="feedwrap" id="feedwrap"><div class="feed">
    <header class="ftop"><button class="iconbtn" id="f-close" aria-label="Свернуть подбор">${ic('down')}</button><div class="fday"><button class="arrow" id="f-prev" aria-label="Предыдущий день">‹</button><span>${DOW[dt.getDay()]}, ${dt.getDate()} ${MON[dt.getMonth()]}</span><button class="arrow" id="f-next" aria-label="Следующий день">›</button></div><span class="fcount">${done}<small>/${total}</small></span></header>
    <div class="deck" id="deck"><div class="ghostcard g2"></div>${under}${card.replace(/(<article[^>]*>)/, '$1' + slots).replace('</article>', actions + '</article>')}</div>
@@ -1557,7 +1579,7 @@ function closeFeed() {
   // Commit the closed state before animating, so a quick reload cannot reopen it.
   F.active = false; S.ui.tab = 'plan'; save();
   const fin = () => { if (S.feed === F && !F.active) render(); };
-  if (w) { w.classList.add('closing'); setTimeout(fin, 230); } else fin();
+  if (w) { w.classList.add('closing'); setTimeout(fin, 110); } else fin();
 }
 function ingFull() {
   const F = S.feed; if (!F || !F.card) return; const d = F.card.dish, ff = famFactor(d, F.slot);
@@ -1571,10 +1593,10 @@ function bindFeed() {
   $('#f-close').onclick = closeFeed;
   $('#f-prev').onclick = () => goDay(-1); $('#f-next').onclick = () => goDay(1);
   document.querySelectorAll('[data-slot]').forEach(b => b.onclick = () => goSlot(F.day, +b.dataset.slot));
-  const live = !F.loading && F.card && !F.exhausted;
+  const live = !F.loading && F.card && !F.exhausted && !F.accessPending;
   ['#f-take', '#f-skip', '#f-dis', '#f-mark'].forEach(s => $(s).disabled = !live);
   $('#f-take').onclick = () => fling('right'); $('#f-skip').onclick = () => fling('left'); $('#f-dis').onclick = () => fling('dis'); $('#f-mark').onclick = markSheet;
-  const pk = $('#f-pick'); if (pk) pk.onclick = pickSeen;
+  const pk = $('#f-pick'); if (pk) { pk.disabled = !!F.accessPending; pk.onclick = pickSeen; }
   const card = $('#card'); if (!card || !live) return;
   const box = $('#ingbox'), more = $('#ingmore');
   const fitIngredients = () => {
@@ -1607,7 +1629,7 @@ function bindFeed() {
 }
 let flinging = false;
 async function fling(dir) {
-  const F = S.feed; if (flinging || !F.card || F.loading) return; flinging = true;
+  const F = S.feed; if (flinging || !F.card || F.loading || F.accessPending) return; flinging = true;
   const card = $('#card');
   if (card) { card.classList.remove('drag'); if (dir !== 'dis') card.style.setProperty('--' + ({left: 'skip', right: 'take'})[dir], 1);
     card.style.transform = {left: 'translateX(-120%) rotate(-12deg)', right: 'translateX(120%) rotate(12deg)', dis: 'scale(.82)'}[dir]; card.style.opacity = '0'; if (dir === 'dis') card.classList.add('disliked'); await sleep(240); }
@@ -1626,7 +1648,7 @@ document.addEventListener('keydown', e => {
 function goDay(delta) { const F = S.feed; const d = (F.day + delta + S.plan.len) % S.plan.len; const slot = S.plan.days[d].slots.findIndex(s => !s); goSlot(d, slot < 0 ? 0 : slot); }
 async function goSlot(day, slot) { const F = S.feed; F.day = day; F.slot = slot; F.card = null; F.exhausted = (F.used[day + '-' + slot] || 0) >= CARD_LIMIT; if (F.exhausted) return render(); await withLoading(nextCard); }
 function place(dish) {
-  const F = S.feed, pat = pattern();
+  const F = S.feed, pat = pattern(); if (F.accessPending) return false;
   const r = safePlace(F.day, F.slot, dish, {manual: F.manual});
   if (!r.ok) { toast(`«${dish.name}» не подходит для этого дня`); return false; }
   if (S.collect.cook2 && 'ld'.includes(pat[F.slot][0]) && F.day + 1 < S.plan.len && !S.plan.days[F.day + 1].slots[F.slot] && !safePlace(F.day + 1, F.slot, dish, {leftover: true}).ok) toast('На завтра это блюдо не повторяю');
@@ -1635,7 +1657,7 @@ function place(dish) {
   toast(`${pat[F.slot][1]}: «${dish.name}»`);
 }
 async function takeCard() {
-  const F = S.feed; if (!F.card) return;
+  const F = S.feed; if (!F.card || F.accessPending) return;
   if (place(F.card.dish) === false) { F.card = null; save(); await withLoading(nextCard); return; }
   const next = firstEmpty(F.day);
   if (!next) { F.active = false; S.ui.tab = 'plan'; save(); render(); toast('Рацион собран. Список покупок готов.'); return; }
@@ -1658,7 +1680,7 @@ function pickSeen() {
   });
 }
 function markSheet() {
-  const F = S.feed; if (!F || !F.card) return; const d = F.card.dish, liked = S.marks.like.includes(d.name);
+  const F = S.feed; if (!F || !F.card || F.accessPending) return; const d = F.card.dish, liked = S.marks.like.includes(d.name);
   sheet(`<p class="eyebrow">Пометка</p><h3>${esc(d.name)}</h3>
   <div class="actions"><button class="btn ghost" id="mk-like">${liked ? 'Убрать «нравится»' : 'Нравится'}</button></div>
   <label class="sublabel">Своя пометка<textarea id="mk-note" rows="3" placeholder="Например: делать без лука, детям меньше острого">${esc(S.marks.notes[d.id] || '')}</textarea></label>
@@ -1785,7 +1807,7 @@ function viewSettings() {
     v.innerHTML = `${appbar('Настройки', 'Профиль и приложение', {back: true})}
     <button class="profile" data-person="${me.id}"><span class="mono">${esc(me.name.slice(0, 1).toUpperCase())}</span><span><b>${esc(me.name)}</b><small>${r0(t.E)} ккал · белок ${r0(t.P)} г в день</small></span>${ic('chev', 'sm')}</button>
     <nav class="rows">${SET_PAGES.map(([k, t, s]) => `<button class="row" data-set="${k}"><span class="medal">${ic(SET_IC[k])}</span><span><b>${t}</b><small>${s}</small></span>${ic('chev', 'sm')}</button>`).join('')}</nav>
-    <p class="hint center">Мой рацион · версия 0.14.0</p>`;
+    <p class="hint center">Мой рацион · версия 0.15.0</p>`;
     v.querySelectorAll('[data-set]').forEach(b => b.onclick = () => { S.ui.set = b.dataset.set; save(); render(); });
     v.querySelector('[data-person]').onclick = () => editPerson(me);
     return;
@@ -2111,6 +2133,7 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSheet()
 if (S.feed && S.feed.active) { S.feed.loading = false; if (!S.feed.card && !S.feed.exhausted) S.feed.active = false; }
 auditPlanSafety(); save();
 render();
+if (S.feed?.active && S.feed.accessPending) authorizeFeed(S.feed);
 poolFill(); window.addEventListener('online', () => poolFill()); // запас блюд докачивается сразу при открытии и при появлении сети
 if ('serviceWorker' in navigator && location.protocol === 'https:' && !location.hostname.endsWith('claude.ai') && !location.hostname.includes('claudeusercontent')) { // новая версия сайта: сервис-воркер обновляется при каждом открытии, страница один раз перезагружается на свежие файлы
   const had = !!navigator.serviceWorker.controller; let reloaded = false;

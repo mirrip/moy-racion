@@ -1028,6 +1028,75 @@ body.empty-stream, body.empty-stream #scroller, body.empty-stream #view { backgr
 
 :root[data-theme="garden"] .sheet-exit-body > :is(h2,h3) { font-size:1.75rem; font-weight:600; line-height:1.18; letter-spacing:-.04em; margin-top:8px; }
 
+/* 0.15 — mobile-first corrections: anchored controls, one-row dates, immediate content. */
+.analytics-filter { position:relative; min-width:0; }
+.analytics-filter .filter-caption { margin:0 0 6px 2px; }
+.filter-trigger { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:12px 14px; width:100%; min-height:48px; border:1px solid var(--line); border-radius:15px 10px 15px 10px; background:var(--surface); color:var(--fg); font-size:.875rem; text-align:left; }
+.filter-trigger>span { min-width:0; overflow-wrap:anywhere; }
+.filter-trigger .ic { width:17px; height:17px; flex:none; transition:transform .12s ease; }
+.filter-trigger[aria-expanded="true"] .ic { transform:rotate(180deg); }
+.filter-menu { position:absolute; top:calc(100% + 7px); left:0; width:max(100%,190px); max-width:calc(100vw - 40px); padding:6px; border:1px solid var(--line); border-radius:17px 10px 17px 10px; background:var(--surface); color:var(--fg); box-shadow:0 14px 28px -8px #0008; z-index:15; max-height:300px; overflow:auto; }
+.analytics-filter:last-child .filter-menu { left:auto; right:0; }
+.filter-menu button { display:flex; justify-content:space-between; align-items:center; width:100%; gap:12px; min-height:46px; padding:11px 12px; border-radius:11px; background:transparent; color:var(--fg); border:0; text-align:left; font-size:.8125rem; }
+.filter-menu button[aria-pressed="true"] { background:var(--gg); color:var(--on-gold); }
+:root[data-theme="garden"] .analytics-controls { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:12px; align-items:end; margin-bottom:16px; }
+:root[data-theme="garden"] .filter-trigger { background:var(--green-fill); border-color:#65805b; box-shadow:inset 0 1px 0 #d9edb540,0 5px 14px -10px #000; }
+:root[data-theme="garden"] .filter-menu { --fg:#162e23; --muted:#56644f; --line:#b5bfa1; background:var(--paper-fill); color:var(--fg); border-color:var(--line); box-shadow:inset 0 1px 0 #fff,0 16px 32px -8px #000a; color-scheme:light; }
+:root[data-theme="garden"] .filter-menu button[aria-pressed="true"] { color:#fffdf8; box-shadow:inset 0 1px 0 #d9edb540; }
+#view .wish-calendar { display:flex; flex-wrap:nowrap; overflow-x:auto; overflow-y:hidden; gap:8px; padding:2px 2px 10px; scroll-snap-type:x proximity; overscroll-behavior-x:contain; -webkit-overflow-scrolling:touch; scrollbar-width:thin; scrollbar-color:var(--gold) transparent; }
+#view .wish-day { flex:0 0 54px; width:54px; height:58px; min-height:58px; max-height:none; scroll-snap-align:start; aspect-ratio:auto; }
+:root[data-theme="garden"] .nutrient-band { height:14px; gap:4px; }
+:root[data-theme="garden"] .range-low { background:linear-gradient(135deg,#efcc53,#d9aa31); box-shadow:inset 0 1px 0 #fff7; }
+:root[data-theme="garden"] .range-normal { background:linear-gradient(135deg,#63ae62,#32824e); box-shadow:inset 0 1px 0 #fff7; }
+:root[data-theme="garden"] .range-high { background:linear-gradient(135deg,#ed8b70,#c95141); box-shadow:inset 0 1px 0 #fff7; }
+:root[data-theme="garden"] .range-zone.unavailable { background:#d2d4c5; box-shadow:none; }
+:root[data-theme="garden"] .range-marker { width:5px; background:#142e24; box-shadow:0 0 0 2px #fffdf8; border-radius:4px; }
+:root[data-theme="garden"] .range-labels { font-size:.75rem; font-weight:600; margin-top:10px; }
+:root[data-theme="garden"] .range-labels span:first-child { color:#78520e; }
+:root[data-theme="garden"] .range-labels span:nth-child(2) { color:#24633b; }
+:root[data-theme="garden"] .range-labels span:last-child { color:#a43d2f; }
+:root[data-theme="garden"] .state-low .range-state { background:#f2d771; color:#60410c; border:1px solid #c9a136; font-weight:600; }
+:root[data-theme="garden"] .state-normal .range-state { background:#badeab; color:#225033; border:1px solid #73a46e; font-weight:600; }
+:root[data-theme="garden"] .state-high .range-state { background:#f1b5a4; color:#792d24; border:1px solid #cb7866; font-weight:600; }
+.nutrient-detail-link { display:flex; align-items:center; justify-content:flex-end; gap:5px; font-size:.75rem; color:var(--gold); margin-top:14px; }
+.nutrient-detail-link .ic { width:15px; height:15px; }
+.nutrient-notes { margin-top:16px; border:1px solid var(--line); border-radius:18px 10px 18px 10px; padding:0 14px; background:var(--surface2); }
+.nutrient-notes summary { cursor:pointer; padding:14px 0; font-size:.875rem; font-weight:600; }
+.nutrient-notes p { font-size:.8125rem; line-height:1.6; margin:0 0 14px; color:var(--muted); }
+:root[data-theme="garden"] .calendar-detail { border-radius:24px 12px 24px 12px; background:radial-gradient(ellipse at 100% 0%,#c8d9b15c,transparent),#f7f3e4; box-shadow:inset 0 1px 0 #fff,0 5px 14px -10px #18432d; padding:18px; }
+:root[data-theme="garden"] .calendar-day.selected { box-shadow:0 0 0 2px #fffdf8,0 0 0 4px #22543b; border-color:#22543b; }
+:root[data-theme="garden"] .day-normal { background:#badeab; color:#225033; }
+:root[data-theme="garden"] .day-low { background:#f2d771; color:#60410c; }
+:root[data-theme="garden"] .day-high { background:#f1b5a4; color:#792d24; }
+:root[data-theme="garden"] .calendar-legend { font-size:.75rem; gap:10px 14px; }
+:root[data-theme="garden"] .calendar-legend i { width:13px; height:13px; border:1px solid #183e282e; }
+.dish-visual { position:relative; overflow:hidden; isolation:isolate; }
+.dish-visual img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; z-index:1; }
+.dish-photo-placeholder { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; width:100%; height:100%; color:var(--muted); background:radial-gradient(ellipse at 40% 0%,#ffffff28,transparent 65%),var(--surface2); }
+.dish-photo-placeholder .ic { width:42px; height:42px; opacity:.65; }
+.dish-photo-placeholder small { font-size:.75rem; }
+.feed-access-status { color:var(--muted); text-align:center; font-size:.75rem; margin:0 0 6px; }
+.feedwrap { animation:none; }
+.feedwrap.closing { transform:none; opacity:0; transition:opacity .1s ease-out; }
+@media (max-width:480px) {
+  :root[data-theme="garden"] .analytics-controls { grid-template-columns:minmax(0,1fr) minmax(0,1fr); }
+  :root[data-theme="garden"] .analytics-summary { padding:18px 20px; }
+  :root[data-theme="garden"] .analytics-history { margin-block:16px; }
+  :root[data-theme="garden"] .analytics-caution { padding:16px; }
+}
+
+.caution-heading { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; }
+.history-counter { display:inline-flex; align-items:center; padding:4px 8px; border:1px solid #a18334; border-radius:8px; color:#62430c; background:#fff7d5; font-size:.75rem; font-weight:600; white-space:nowrap; }
+:root[data-theme="garden"] .analytics-caution .caution-heading strong { font-size:.875rem; }
+:root[data-theme="garden"] .analytics-caution p { margin:8px 0 0; font-size:.8125rem; line-height:1.5; }
+:root[data-theme="garden"] .analytics-caution details { margin-top:10px; font-size:.75rem; }
+:root[data-theme="garden"] .analytics-caution summary { font-weight:600; cursor:pointer; }
+:root[data-theme="garden"] .analytics-history { gap:4px; }
+:root[data-theme="garden"] .analytics-history strong { font-size:.875rem; }
+:root[data-theme="garden"] .analytics-history span { font-size:.8125rem; }
+
+:root[data-theme="garden"] .analytics-caution summary { color:#62430c; }
+
 </style>
 </head><body>
 <a class="skip-link" href="#view">К содержимому</a>
@@ -1035,9 +1104,9 @@ body.empty-stream, body.empty-stream #scroller, body.empty-stream #view { backgr
 <nav id="nav" aria-label="Разделы"><div></div></nav>
 <div id="sheet" hidden><div class="sheet-card" role="dialog" aria-modal="true" tabindex="-1"><div class="sheet-grip"><button class="btn ghost sm" id="sheet-close">Закрыть</button></div><div id="sheet-body"></div></div></div>
 <div id="toast" role="status" hidden></div>
-<script src="data.js?v=1795530370"></script>
-<script src="nutrition-data.js?v=1795530370"></script>
-<script src="analytics.js?v=1795530370"></script>
-<script src="app.js?v=1795530370"></script>
+<script src="data.js?v=1795531774"></script>
+<script src="nutrition-data.js?v=1795531774"></script>
+<script src="analytics.js?v=1795531774"></script>
+<script src="app.js?v=1795531774"></script>
 </body>
 </html>
