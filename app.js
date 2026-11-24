@@ -741,10 +741,33 @@ function applyPrices(ids, cost) {
 function toast(t) { const el = $('#toast'); el.textContent = t; el.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => el.hidden = true, 2600); }
 function sheet(html, onMount, opts = {}) {
   closeSheet.after = opts.onClose || null;
-  const el = $('#sheet'); el.classList.toggle('full', !!opts.full); el.classList.remove('pulling'); $('.sheet-card').style.transform = '';
+  const el = $('#sheet'), card = $('.sheet-card');
+  if (el.hidden) sheet.returnFocus = document.activeElement;
+  el.classList.toggle('full', !!opts.full); el.classList.remove('pulling'); card.style.transform = '';
   $('#sheet-body').innerHTML = html; el.hidden = false; $('#sheet-body').scrollTop = 0; document.body.classList.add('sheeted'); onMount && onMount($('#sheet-body'));
+  $('#scroller').inert = true; $('#nav').inert = true;
+  const title = $('#sheet-body h2, #sheet-body h3');
+  card.removeAttribute('aria-label'); card.removeAttribute('aria-labelledby');
+  if (title) { title.id = title.id || 'sheet-heading'; card.setAttribute('aria-labelledby', title.id); }
+  else card.setAttribute('aria-label', 'Мой рацион');
+  if (!card.contains(document.activeElement)) card.focus({preventScroll: true});
 }
-const closeSheet = () => { const after = closeSheet.after; closeSheet.after = null; $('#sheet').hidden = true; document.body.classList.remove('sheeted'); if (after) after(); };
+const closeSheet = () => {
+  if ($('#sheet').hidden) return;
+  const after = closeSheet.after, opener = sheet.returnFocus;
+  closeSheet.after = null; sheet.returnFocus = null; $('#sheet').hidden = true; document.body.classList.remove('sheeted');
+  $('#scroller').inert = false; $('#nav').inert = false;
+  if (opener?.isConnected) opener.focus({preventScroll: true});
+  if (after) after();
+};
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Tab' || $('#sheet').hidden) return;
+  const card = $('.sheet-card'), items = [...card.querySelectorAll('button:not(:disabled),a[href],input:not(:disabled),select:not(:disabled),textarea:not(:disabled),[tabindex="0"]')].filter(el => el.getClientRects().length);
+  const first = items[0], last = items[items.length - 1];
+  if (!first) { e.preventDefault(); card.focus(); return; }
+  if (e.shiftKey && (document.activeElement === first || document.activeElement === card)) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && (document.activeElement === last || document.activeElement === card)) { e.preventDefault(); first.focus(); }
+});
 (function pullToClose() { // полноэкранное окно: потянуть вниз от верха — закрыть
   const body = $('#sheet-body'), card = $('.sheet-card'); let y0 = null, dy = 0;
   body.addEventListener('touchstart', e => { y0 = body.scrollTop <= 0 ? e.touches[0].clientY : null; dy = 0; }, {passive: true});
@@ -780,7 +803,7 @@ const IC = {
 };
 const ic = (n, cls = '') => `<svg class="ic ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${IC[n]}</svg>`;
 function appbar(title, sub, opts = {}) {
-  return `<header class="appbar">${opts.back ? `<button class="iconbtn" data-back aria-label="Назад">${ic('back')}</button>` : ''}<div class="ab-t"><p class="eyebrow">${sub || 'Мой рацион'}</p><h2 class="gt">${title}</h2></div>${opts.back ? '' : `<button class="iconbtn" data-gear aria-label="Настройки">${ic('gear')}</button>`}</header>`;
+  return `<header class="appbar">${opts.back ? `<button class="iconbtn" data-back aria-label="Назад">${ic('back')}</button>` : ''}<div class="ab-t"><p class="eyebrow">${sub || 'Мой рацион'}</p><h1 class="gt">${title}</h1></div>${opts.back ? '' : `<button class="iconbtn" data-gear aria-label="Настройки">${ic('gear')}</button>`}</header>`;
 }
 const kbju = n => `<span class="k"><b>${r0(n.kcal)}</b> ккал</span><span>Б ${r0(n.p)}</span><span>Ж ${r0(n.f)}</span><span>У ${r0(n.c)}</span>`;
 
@@ -790,6 +813,7 @@ function render() {
   const vk = (S.feed && S.feed.active) ? 'feed' : S.ui.tab + (S.ui.set || ''); if (vk !== lastView) { const sc = $('#scroller'); if (sc) sc.scrollTop = 0; window.scrollTo(0, 0); lastView = vk; }
   document.querySelectorAll('.tab').forEach(b => { b.setAttribute('aria-current', b.dataset.tab === S.ui.tab ? 'page' : 'false'); b.disabled = !!autoRun; });
   const v = $('#view');
+  v.dataset.page = S.feed?.active ? 'feed' : !S.onboarded ? 'onboarding' : S.ui.tab;
   if (!S.onboarded || !S.people.length) { v.innerHTML = viewOnboard(); bindOnboard(); $('#nav').hidden = true; return; }
   $('#nav').hidden = false;
   const feeding = !!(S.feed && S.feed.active); document.body.classList.toggle('feeding', feeding);
@@ -995,6 +1019,7 @@ function mealCard(day, i, m) {
   if (sl.unsafe) return `<article class="meal unsafe"><p class="mtype">${m[1]}</p><p class="mname">${esc(d.name)}</p><p class="hint">Это блюдо нужно заменить</p><button class="btn primary" data-replace="${day}:${i}">Заменить блюдо</button></article>`;
   return `<article class="meal${sl.status ? ' st-' + sl.status : ''}">
    <button class="mhead" data-meal="${day}:${i}" aria-haspopup="dialog"><span class="mgo" aria-hidden="true">›</span>
+     ${dishPhoto(d) ? `<img class="meal-photo" src="${esc(dishPhoto(d))}" width="640" height="360" alt="" loading="lazy" onerror="this.hidden=true">` : ''}
      <span class="mtype">${m[1]}${sl.status === 'eaten' ? ' · съедено' : sl.status === 'skipped' ? ' · пропущено' : ''}</span>
      <span class="mname">${esc(d.name)}</span>
      <span class="macro">${kbju(n)}</span>
@@ -1028,6 +1053,7 @@ function mealPage(day, i) { // блюдо — отдельное полноэк�
   const dt = new Date(addDays(S.plan.start, day) + 'T12:00:00'), fs = slotFactor(d, i), tot = fs.reduce((a, b) => a + b, 0), base = nut(d);
   sheet(`<p class="eyebrow">${m[1]} · ${DOW[dt.getDay()]}, ${dt.getDate()} ${MON[dt.getMonth()]}${sl.status === 'eaten' ? ' · съедено' : sl.status === 'skipped' ? ' · пропущено' : ''}</p>
    <h2 class="pg-title">${esc(d.name)}</h2>
+   ${dishPhoto(d) ? `<img class="recipe-photo" src="${esc(dishPhoto(d))}" width="640" height="400" alt="" onerror="this.hidden=true">` : ''}
    <div class="grid4"><div><b>${r0(n.kcal)}</b><span>ккал</span></div><div><b>${r0(n.p)}</b><span>белки, г</span></div><div><b>${r0(n.f)}</b><span>жиры, г</span></div><div><b>${r0(n.c)}</b><span>углеводы, г</span></div></div>
    <div class="facts"><div><em>Готовка</em><b>${d.time} мин</b></div><div><em>Сложность</em><b>${d.diff} из 10</b></div><div><em>Клетчатка</em><b>${r1(n.fib)} г</b></div><div><em>Стоимость</em><b>≈ ${r0(famCost(d) / 10) * 10} ₽</b></div></div>
    ${S.marks.notes[d.id] ? `<p class="note">${ic('heart', 'sm')} ${esc(S.marks.notes[d.id])}</p>` : ''}
@@ -1179,8 +1205,8 @@ function viewAnalytics() {
     <label>Кто ест<select id="a-person"><option value="all">Вся семья</option>${Object.entries(people).map(([id, name]) => `<option value="${esc(id)}"${selected === id ? ' selected' : ''}>${esc(name)}</option>`).join('')}</select></label></div>
     <section class="analytics-summary"><b>${a.days}</b><div>дней с сохранённым рационом<p>${period === 'all' ? 'За всё время использования' : period === 'week' ? 'За последние 7 дней' : 'За последние 30 дней'}</p></div></section>
     <div class="analytics-history"><strong>${since ? 'История с ' + since : 'История ещё не началась'}</strong><span>${history.days} ${ruDays(history.days)} с записями за всё время${selected === 'all' ? ' · семья' : ' · ' + esc(people[selected])}</span><small>Дни без записей не считаются заполненными. История хранится на этом устройстве.</small></div>
-    <p class="hint analytics-note">По сохранённому рациону до сегодняшнего дня, включая неотмеченные приёмы. Пропущенные блюда исключены. Это состав меню, а не подтверждение съеденного. Границы суммируются за дни с данными, с учётом норм каждого человека. 100% потребности не означает верхний предел.</p>
     ${history.days < 30 ? `<aside class="analytics-caution" role="note"><strong>Пока недостаточно истории</strong><p>Сохранено ${history.days} ${ruDays(history.days)} с данными из 30. Это предварительная сводка отдельных приёмов пищи и дней. По ней пока нельзя судить об обычном питании: нужно накопить хотя бы 30 дней записей.</p></aside>` : ''}
+    <details class="analytics-method"><summary>Как считаются показатели</summary><p class="hint analytics-note">По сохранённому рациону до сегодняшнего дня, включая неотмеченные приёмы. Пропущенные блюда исключены. Это состав меню, а не подтверждение съеденного. Границы суммируются за дни с данными, с учётом норм каждого человека. 100% потребности не означает верхний предел.</p></details>
     ${!a.days ? `<div class="empty"><h3>${selected === 'all' ? 'Здесь появится ваша аналитика' : esc(people[selected]) + ': пока нет данных'}</h3><p>За выбранный период нет сохранённого рациона. Нули не считаются недостатком.</p></div>` : groups.map(([g, title]) => `<section class="nutrient-group"><h3>${title}</h3>${RacionAnalytics.ordered(RacionAnalytics.data.nutrients.filter(n => n.group === g), a.ranges).map(card).join('')}</section>`).join('')}
     <p class="hint analytics-note">Верхние границы — из отчётов проекта, система NASEM; рабочие коридоры отмечены отдельно. Пределы только для добавок не применяются к обычной пище. Отсутствие верхней границы не означает, что любое количество полезно. Старая история сохраняет прежние ориентиры; возрастные пределы без исторических данных не выдумываются. Аналитика не ставит диагноз.</p>`;
   $('#view').querySelectorAll('[data-nutrient]').forEach(el => {
@@ -1203,23 +1229,23 @@ function viewCollect() {
   const cooking = pat.map((m, slot) => `<div class="meal-difficulty"><span class="meal-difficulty-title">${m[1]}${m[0] === 's' && pat.filter(x => x[0] === 's').length > 1 ? ' ' + (pat.slice(0, slot + 1).filter(x => x[0] === 's').length) : ''}</span><div class="secgrid">${SECTIONS.map(([title], i) => `<button class="secbtn${secs(slot).includes(i) ? ' on' : ''}" data-slot="${slot}" data-sec="${i}" aria-pressed="${secs(slot).includes(i)}" aria-label="${m[1]}: ${title}"><b>${SEC_TIME[i][0]}</b><small>${SEC_TIME[i][1]}</small></button>`).join('')}</div></div>`).join('');
   const dates = Array.from({length: len}, (_, i) => { const date = addDays(start, i), dt = new Date(date + 'T12:00:00'); return `<button class="wish-day${selectedDates.includes(date) ? ' on' : ''}" data-wish-date="${date}" aria-pressed="${selectedDates.includes(date)}"${date < iso(new Date()) ? ' disabled' : ''}><span>${DOW[dt.getDay()]}</span><b>${dt.getDate()}</b><small>${MON[dt.getMonth()]}</small></button>`; }).join('');
   $('#view').innerHTML = `${appbar('Сбор рациона', len + ' дней с сегодняшнего')}
-    ${med ? '<div class="warn box">Отмечено состояние здоровья, при котором автоматический рацион не подходит. Составьте питание вместе с врачом.</div>' : ''}
-    <div class="panel collect-main"><label class="field"><span><em>Бюджет семьи на ${len} дней, ₽</em><input id="c-budget" type="number" inputmode="numeric" min="0" step="100" value="${c.budget}"></span></label>
-    <p class="budgetnote${lowBudget() ? ' low' : ''}">${lowBudget() ? 'Бюджет ниже ориентира полноценного рациона. Подберём самые экономные блюда.' : `≈ ${r0(baseBudget() / len * 7 / 10) * 10} ₽ в неделю на взрослого`}</p>
+    ${med ? '<div class="warn box collect-warning">Отмечено состояние здоровья, при котором автоматический рацион не подходит. Составьте питание вместе с врачом.</div>' : ''}
+    <div class="panel collect-main"><label class="field"><span><em>Бюджет семьи на ${len} дней, ₽</em><input id="c-budget" name="budget" autocomplete="off" aria-describedby="budget-help" type="number" inputmode="numeric" min="0" step="100" value="${c.budget}"></span></label>
+    <p id="budget-help" class="budgetnote${lowBudget() ? ' low' : ''}">${lowBudget() ? 'Бюджет ниже ориентира полноценного рациона. Подберём самые экономные блюда.' : `≈ ${r0(baseBudget() / len * 7 / 10) * 10} ₽ в неделю на взрослого`}</p>
     <div class="cooking-head"><h3>Время готовки</h3><span>Для каждого приёма · можно несколько</span></div>${cooking}</div>
     <div class="collect-actions"><button class="btn primary wide big" id="c-auto"${med || busy ? ' disabled' : ''}>${ic('analytics')}<span>Собрать рацион автоматически</span></button>
     <button class="btn ghost wide" id="c-go"${med || busy ? ' disabled' : ''}>${ic('collect')}<span>${started ? 'Продолжить сбор' : 'Собрать рацион'}</span></button></div>
     ${busy ? `<div class="auto-progress" role="status" aria-live="polite">${esc(S.ui.autoProgress || 'Подбираем блюда…')}<button class="linkbtn" id="c-auto-stop">Остановить</button></div>` : ''}
     ${S.ui.autoResult ? `<p class="hint auto-result" role="status">${esc(S.ui.autoResult)}</p>` : ''}
     <div class="panel gap wish-panel"><h3>Желаемое блюдо</h3><div class="wish-compose">
-    <label class="wish-name-label">Название<input id="c-wish" placeholder="Борщ, плов…" value="${esc(S.ui.wishName || '')}" enterkeyhint="done" aria-label="Название блюда"></label>
+    <label class="wish-name-label">Название<input id="c-wish" name="desired-dish" autocomplete="off" placeholder="Борщ, плов…" value="${esc(S.ui.wishName || '')}" enterkeyhint="done" aria-label="Название блюда"></label>
     <button class="addbtn wish-favorite" id="c-wish-fav" aria-label="Избранные блюда">${ic('heart')}</button>
     <label class="wish-meal-label">Приём пищи<select id="c-wish-slot">${mealOptions}</select></label>
     <button class="addbtn" id="c-wish-add" aria-label="Добавить блюдо на выбранные даты">${ic('plus')}</button></div>
     <div class="wish-calendar-head"><span>Даты · можно несколько</span><button class="linkbtn" id="wish-clear">Ближайший день</button></div><div class="wish-calendar" aria-label="Даты желаемого блюда">${dates}</div>
     <p class="hint wish-help">${selectedDates.length ? 'Выбрано дат: ' + selectedDates.length + '. Блюдо встанет в свободный приём каждой даты.' : 'Без выбранных дат — ближайший свободный приём.'}</p>
     ${wishes.length ? `<div class="chips">${[...new Set(wishes.map(x => x.dish.name))].map(n => `<span class="chip">${esc(n)}</span>`).join('')}</div>` : ''}</div>
-    <div class="panel gap"><div class="field switch">${ic('shop')}<span><em>Есть продукты дома</em><small>Блюда из них — в ближайшие дни</small></span><button class="tog${c.homeOn ? ' on' : ''}" id="c-home-tog" role="switch" aria-checked="${c.homeOn}" aria-label="Есть продукты дома"><i></i></button></div>
+    <div class="panel gap collect-options"><div class="field switch">${ic('shop')}<span><em>Есть продукты дома</em><small>Блюда из них — в ближайшие дни</small></span><button class="tog${c.homeOn ? ' on' : ''}" id="c-home-tog" role="switch" aria-checked="${c.homeOn}" aria-label="Есть продукты дома"><i></i></button></div>
     ${c.homeOn ? `<div class="field col"><div class="chipin"><input id="c-home" placeholder="Например, гречка"><button class="btn ghost sm" id="c-home-add">Добавить</button></div><div class="chips">${c.home.map((n, i) => `<button class="chip x" data-rmhome="${i}">${esc(n)}</button>`).join('')}</div></div>` : ''}
     <div class="field switch">${ic('dish')}<span><em>Готовить на 2 дня</em><small>Обед и ужин — одной готовкой</small></span><button class="tog${c.cook2 ? ' on' : ''}" id="c-cook2" role="switch" aria-checked="${c.cook2}" aria-label="Готовить на 2 дня"><i></i></button></div>
     <div class="field switch">${ic('leaf')}<span><em>Другие кухни</em><small>Новые блюда — из кухонь, которые вы выбираете реже</small></span><button class="tog${c.otherCuisines ? ' on' : ''}" id="c-other" role="switch" aria-checked="${!!c.otherCuisines}" aria-label="Другие кухни"><i></i></button></div></div>`;
@@ -1241,12 +1267,17 @@ function viewCollect() {
   if (c.homeOn) { const add = () => { const n = $('#c-home').value.trim(); if (n && !c.home.includes(n)) c.home.push(n); save(); render(); }; $('#c-home-add').onclick = add; $('#c-home').onkeydown = e => { if (e.key === 'Enter') add(); }; v.querySelectorAll('[data-rmhome]').forEach(b => b.onclick = () => { c.home.splice(+b.dataset.rmhome, 1); save(); render(); }); }
   $('#c-cook2').onclick = () => { c.cook2 = !c.cook2; save(); render(); }; $('#c-other').onclick = () => { c.otherCuisines = !c.otherCuisines; save(); render(); };
 }
+function dishPhoto(d) {
+  if (!d || typeof TT_SET === 'undefined') return '';
+  const match = TT_SET.find(t => t.id === d.id || nameKey(t.name) === nameKey(d.name));
+  return match ? 'img/tt/' + match.id + '.webp' : '';
+}
 function favoriteDishes() {
   const taste = typeof TT_SET === 'undefined' ? [] : TT_SET, rows = new Map();
   const add = (d, at = 0, liked = false) => {
     if (!d || !Array.isArray(d.ing) || isBanned(d) || !allowedByDiet(d)) return;
-    const photo = taste.find(t => t.id === d.id || nameKey(t.name) === nameKey(d.name)), old = rows.get(d.id);
-    rows.set(d.id, {dish: d, at: Math.max(at, S.marks.recent[d.id] || 0, old?.at || 0), liked: liked || old?.liked || false, image: photo ? 'img/tt/' + photo.id + '.webp' : ''});
+    const old = rows.get(d.id);
+    rows.set(d.id, {dish: d, at: Math.max(at, S.marks.recent[d.id] || 0, old?.at || 0), liked: liked || old?.liked || false, image: dishPhoto(d)});
   };
   (S.taste.profile?.liked || []).forEach((id, i) => add(getDish(id) || taste.find(d => d.id === id), (S.taste.profile.at || 0) + i, true));
   Object.values(S.lib).forEach(sys => Object.values(sys).forEach(l => [...l.sec, ...l.main].forEach(id => add(getDish(id)))));
@@ -1258,7 +1289,7 @@ function wishFavorites() {
   const list = favoriteDishes();
   sheet(`<p class="eyebrow">Ваши вкусы</p><h3>Избранные блюда</h3><p class="hint">Лайки из знакомства и выбранные блюда. Сначала недавние. Нажмите на карточку, затем выберите приём и даты.</p>${list.length ? '<label class="sublabel">Поиск<input id="fav-search" placeholder="Название блюда"></label><div class="favorite-feed" id="fav-list"></div>' : '<p class="hint">Пока здесь пусто. Понравившиеся блюда из знакомства и выбранные рецепты появятся здесь.</p>'}`, b => {
     if (!list.length) return;
-    const paint = () => { const q = $('#fav-search', b).value.toLocaleLowerCase('ru').trim(), matches = list.filter(r => r.dish.name.toLocaleLowerCase('ru').includes(q)); $('#fav-list', b).innerHTML = matches.map(({dish: d, image, liked}) => `<button class="favorite-card" data-fav="${esc(d.id)}"><span class="favorite-photo">${image ? `<img src="${esc(image)}" alt="" loading="lazy">` : ic('dish')}<span class="favorite-no-photo"${image ? ' hidden' : ''}>Фото пока нет</span></span><span class="favorite-caption"><small>${liked ? '♥ Нравится' : 'Выбирали раньше'}</small><b>${esc(d.name)}</b><span>${d.time} мин · ${SECTIONS[sectionOf(d)][0]}</span></span>${ic('plus')}</button>`).join('') || '<p class="hint">Ничего не найдено</p>';
+    const paint = () => { const q = $('#fav-search', b).value.toLocaleLowerCase('ru').trim(), matches = list.filter(r => r.dish.name.toLocaleLowerCase('ru').includes(q)); $('#fav-list', b).innerHTML = matches.map(({dish: d, image, liked}) => `<button class="favorite-card" data-fav="${esc(d.id)}"><span class="favorite-photo">${image ? `<img src="${esc(image)}" width="208" height="208" alt="" loading="lazy">` : ic('dish')}<span class="favorite-no-photo"${image ? ' hidden' : ''}>Фото пока нет</span></span><span class="favorite-caption"><small>${liked ? '♥ Нравится' : 'Выбирали раньше'}</small><b>${esc(d.name)}</b><span>${d.time} мин · ${SECTIONS[sectionOf(d)][0]}</span></span>${ic('plus')}</button>`).join('') || '<p class="hint">Ничего не найдено</p>';
       b.querySelectorAll('.favorite-photo img').forEach(img => img.onerror = () => { const caption = img.parentElement.querySelector('.favorite-no-photo'); if (caption) caption.hidden = false; img.remove(); });
       b.querySelectorAll('[data-fav]').forEach(x => x.onclick = () => { const d = list.find(r => r.dish.id === x.dataset.fav).dish; if (Array.isArray(d.steps) && d.steps.length) rememberDish(d); S.ui.wishName = d.name; S.ui.wishDishId = getDish(d.id) ? d.id : null; if (!d.types.includes(S.ui.wishType || 'b')) S.ui.wishType = pattern().find(m => d.types.includes(m[0]))?.[0] || pattern()[0][0]; save(); closeSheet(); render(); }); };
     $('#fav-search', b).oninput = paint; paint();
@@ -1419,7 +1450,7 @@ function cardHtml(d, m, slot, under) { // under — следующая карт�
    <div class="dc-body"><div class="grid4 kb"><div><b>${r0(n.kcal)}</b><span>ккал</span></div><div><b>${r0(n.p)}</b><span>белки, г</span></div><div><b>${r0(n.f)}</b><span>жиры, г</span></div><div><b>${r0(n.c)}</b><span>углев., г</span></div></div></div></article>`;
   return `<article class="dcard" id="card" tabindex="0" aria-label="${esc(d.name)}">
    <span class="stamp st-take">Взять</span><span class="stamp st-skip">Пропуск</span><span class="stamp st-mark">Пометка</span><span class="stamp st-close">Свернуть</span>
-   <div class="dc-hero"><div class="plate"><i></i><b>${esc((d.name.trim()[0] || '·').toUpperCase())}</b></div>
+   <div class="dc-hero"><div class="plate">${dishPhoto(d) ? `<img class="plate-photo" src="${esc(dishPhoto(d))}" width="148" height="148" alt="" onerror="this.hidden=true">` : `<i></i><b>${esc((d.name.trim()[0] || '·').toUpperCase())}</b>`}</div>
     <div class="dc-head"><div class="dc-tags"><span>${m[1]}</span><span>${sec}</span></div><h3 class="cname">${esc(d.name)}</h3></div></div>
    <div class="dc-body">
     <div class="grid4 kb"><div><b>${r0(n.kcal)}</b><span>ккал</span></div><div><b>${r0(n.p)}</b><span>белки, г</span></div><div><b>${r0(n.f)}</b><span>жиры, г</span></div><div><b>${r0(n.c)}</b><span>углев., г</span></div></div>
@@ -1453,8 +1484,10 @@ function viewFeed() {
   </div></section>`;
 }
 function closeFeed() {
-  const F = S.feed, w = $('#feedwrap'); if (!F) return;
-  const fin = () => { F.active = false; S.ui.tab = 'plan'; save(); render(); };
+  const F = S.feed, w = $('#feedwrap'); if (!F || !F.active) return;
+  // Commit the closed state before animating, so a quick reload cannot reopen it.
+  F.active = false; S.ui.tab = 'plan'; save();
+  const fin = () => { if (S.feed === F && !F.active) render(); };
   if (w) { w.classList.add('closing'); setTimeout(fin, 230); } else fin();
 }
 function ingFull() {
@@ -1669,7 +1702,7 @@ function viewSettings() {
     v.innerHTML = `${appbar('Настройки', 'Профиль и приложение', {back: true})}
     <button class="profile" data-person="${me.id}"><span class="mono">${esc(me.name.slice(0, 1).toUpperCase())}</span><span><b>${esc(me.name)}</b><small>${r0(t.E)} ккал · белок ${r0(t.P)} г в день</small></span>${ic('chev', 'sm')}</button>
     <nav class="rows">${SET_PAGES.map(([k, t, s]) => `<button class="row" data-set="${k}"><span class="medal">${ic(SET_IC[k])}</span><span><b>${t}</b><small>${s}</small></span>${ic('chev', 'sm')}</button>`).join('')}</nav>
-    <p class="hint center">Мой рацион · версия 0.11.3</p>`;
+    <p class="hint center">Мой рацион · версия 0.12.0</p>`;
     v.querySelectorAll('[data-set]').forEach(b => b.onclick = () => { S.ui.set = b.dataset.set; save(); render(); });
     v.querySelector('[data-person]').onclick = () => editPerson(me);
     return;
@@ -1677,8 +1710,8 @@ function viewSettings() {
   const title = SET_PAGES.find(x => x[0] === pg)[1];
   const meds = [['kidney','Болезни почек'],['diabetes','Диабет на инсулине или сульфонилмочевине'],['ed','Расстройство пищевого поведения'],['preg','Беременность или кормление'],['warfarin','Приём варфарина'],['gi','Целиакия, подагра, тяжёлые болезни печени или ЖКТ']];
   let body = '';
-  if (pg === 'look') body = `<h4>Тема</h4><div class="themes">${[['garden','Солнечный сад','Молочный, жёлтый и глубокий зелёный'],['light','Светлая','Крем, олива, коралл'],['dark','Тёмная','Графит и золото'],['system','Как в системе','Меняется сама']].map(([k, t, s]) => `<button class="theme-card t-${k}${S.theme === k ? ' on' : ''}" data-theme-set="${k}"><i></i><b>${t}</b><small>${s}</small></button>`).join('')}</div>
-    ${S.theme === 'garden' ? '<p class="hint">Молочные карточки, тёплые жёлтые акценты и насыщенный глубокий зелёный фон. Прежние темы доступны выше.</p>' : `<h4>Акцент</h4><div class="accents">${[['gold','Классическое золото'],['champagne','Шампань'],['rose','Розовое золото']].map(([k, t]) => `<button class="accent a-${k}${(S.accent || 'gold') === k ? ' on' : ''}" data-accent="${k}"><i></i><span>${t}</span></button>`).join('')}</div>`}`;
+  if (pg === 'look') body = `<h4>Тема</h4><div class="themes">${[['garden','Сад','Молочный, лесной зелёный, солнечные акценты'],['light','Светлая','Крем, олива, коралл'],['dark','Тёмная','Графит и золото'],['system','Как в системе','Меняется сама']].map(([k, t, s]) => `<button class="theme-card t-${k}${S.theme === k ? ' on' : ''}" data-theme-set="${k}"><i></i><b>${t}</b><small>${s}</small></button>`).join('')}</div>
+    ${S.theme === 'garden' ? '<p class="hint">Молочная основа, лесной зелёный и тёплые акценты. Чёткая типографика, спокойные поверхности и единое оформление всех разделов.</p>' : `<h4>Акцент</h4><div class="accents">${[['gold','Классическое золото'],['champagne','Шампань'],['rose','Розовое золото']].map(([k, t]) => `<button class="accent a-${k}${(S.accent || 'gold') === k ? ' on' : ''}" data-accent="${k}"><i></i><span>${t}</span></button>`).join('')}</div>`}`;
   if (pg === 'family') body = `<ul class="people">${S.people.map(p => { const t = personTargets(p); return `<li><button data-person="${p.id}"><span class="mono">${esc(p.name.slice(0, 1).toUpperCase())}</span><span><b>${esc(p.name)}</b><small>${p.sex === 'm' ? 'М' : 'Ж'}, ${p.age} лет, ${p.weight} кг · ${r0(t.E)} ккал, белок ${r0(t.P)} г</small></span>${ic('chev', 'sm')}</button></li>`; }).join('')}</ul>
     ${S.people.length < 10 ? '<button class="btn ghost wide" id="st-add">Добавить человека</button>' : '<p class="hint">Максимум 10 человек.</p>'}
     <p class="hint">Блюда общие для всей семьи, порции считаются по нормам каждого.</p>`;
@@ -1862,7 +1895,7 @@ async function tasteTest(mode, onDone) {
     if (e.key === 'ArrowRight') { e.preventDefault(); answer(1); } else if (e.key === 'ArrowLeft') { e.preventDefault(); answer(-1); } else if (e.key === 'ArrowDown') { e.preventDefault(); answer(-3); }
   };
   const cleanup = () => document.removeEventListener('keydown', onKey);
-  const cardHtml = (d, back) => `<div class="tt-card${back ? ' tt-back' : ''}" ${back ? 'aria-hidden="true"' : 'id="tt-top"'}><div class="tt-img">${d.img ? `<img src="${esc(d.img)}" alt="" draggable="false" onerror="this.outerHTML='<div class=&quot;tt-ph&quot;>${esc(([...d.name][0] || '').toUpperCase())}</div>'">` : `<div class="tt-ph">${esc(([...d.name][0] || '').toUpperCase())}</div>`}${back ? '' : '<span class="tt-stamp tt-like">Нравится</span><span class="tt-stamp tt-nope">Не моё</span><span class="tt-stamp tt-never">Никогда</span>'}</div><div class="tt-name">${esc(d.name)}</div><div class="tt-meta">${d.time} мин · ${d.kcal} ккал · ${TT_LVN[d.lvl]}</div><div class="tt-meta tt-ing">${esc(ttIng(d))}</div></div>`;
+  const cardHtml = (d, back) => `<div class="tt-card${back ? ' tt-back' : ''}" ${back ? 'aria-hidden="true"' : 'id="tt-top"'}><div class="tt-img">${d.img ? `<img src="${esc(d.img)}" width="640" height="480" alt="" draggable="false" onerror="this.outerHTML='<div class=&quot;tt-ph&quot;>${esc(([...d.name][0] || '').toUpperCase())}</div>'">` : `<div class="tt-ph">${esc(([...d.name][0] || '').toUpperCase())}</div>`}${back ? '' : '<span class="tt-stamp tt-like">Нравится</span><span class="tt-stamp tt-nope">Не моё</span><span class="tt-stamp tt-never">Никогда</span>'}</div><div class="tt-name">${esc(d.name)}</div><div class="tt-meta">${d.time} мин · ${d.kcal} ккал · ${TT_LVN[d.lvl]}</div><div class="tt-meta tt-ing">${esc(ttIng(d))}</div></div>`;
   const paint = () => {
     $('#tt-eb', root).textContent = (mode === 'family' ? 'Выбирайте вместе · ' : 'Тест вкусов · ') + `${i + 1} из ${deck.length}`;
     $('#tt-stack', root).innerHTML = (deck[i + 1] ? cardHtml(deck[i + 1], true) : '') + cardHtml(deck[i], false);
