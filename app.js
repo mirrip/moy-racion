@@ -1056,7 +1056,8 @@ function syncAnalytics() {
       if (date > today || (date < today && ledger[date])) return;
       if (!day.slots.some(Boolean)) { if (date === today && current) delete ledger[date]; return; }
       ledger[date] = RacionAnalytics.makeDay(day, date, S.people, {
-        targets: p => RacionAnalytics.targets(p, personTargets(p), microNorm(p, S.settings.norms)),
+        targets: p => RacionAnalytics.targets(p, personTargets(p), microNorm(p, S.settings.norms), S.settings.norms),
+        limits: p => RacionAnalytics.limits(p, personTargets(p), microNorm(p, S.settings.norms), S.settings.norms),
         factors: (dish, slot) => S.people.map(p => Math.min(2.5, Math.max(.5, personTargets(p).E * pat[slot][2] / 100 / (nut(dish).kcal || 1)))),
         addons: addons[i] || []
       }, plan.meals);
@@ -1070,27 +1071,39 @@ function viewAnalytics() {
   const now = iso(new Date()), period = ['week', 'month', 'all'].includes(S.ui.analyticsPeriod) ? S.ui.analyticsPeriod : 'week';
   const from = period === 'all' ? '0000-01-01' : addDays(now, period === 'week' ? -6 : -29);
   const people = {}; Object.values(S.analytics.days).forEach(d => Object.entries(d.people || {}).forEach(([id, p]) => people[id] = p.name));
+  S.people.forEach(p => people[p.id] = p.name);
   const selected = S.ui.analyticsPerson && people[S.ui.analyticsPerson] ? S.ui.analyticsPerson : 'all';
   const a = RacionAnalytics.aggregate(S.analytics.days, from, now, selected);
   const unit = {g: 'г', mg: 'мг', mcg: 'мкг', kcal: 'ккал'}, fmt = n => new Intl.NumberFormat('ru-RU', {maximumFractionDigits: n < 1 && n > 0 ? 3 : 1}).format(n);
   const groups = [['vitamin', 'Витамины'], ['mineral', 'Минералы'], ['amino', 'Аминокислоты'], ['fat', 'Жирные кислоты'], ['macro', 'Белки, жиры и углеводы'], ['carb', 'Углеводы и клетчатка'], ['energy', 'Энергия'], ['other', 'Другие показатели']];
-  const upper = new Set(['na', 'sfa', 'sugar_add']);
   const card = n => {
-    const v = a.values[n.id] || 0, target = a.targets[n.id], unknown = a.missing[n.id], hasTarget = target > 0;
-    const pct = hasTarget ? v / target * 100 : null, limit = upper.has(n.id), left = hasTarget ? Math.max(0, target - v) : 0;
-    const status = unknown ? 'Неполные данные' : !hasTarget ? 'Без отдельного ориентира' : limit ? (v > target ? 'Выше предела' : 'В пределах') : pct >= 90 ? 'Ориентир достигнут' : 'Есть недобор';
-    return `<article class="nutrient${unknown ? ' unknown' : ''}"><div class="nutrient-head"><h4>${esc(n.name)}</h4><span>${!unknown && pct != null ? r0(pct) + '%' : '—'}</span></div>
-      <div class="nutrient-amount">${unknown ? 'Не менее ' : ''}<b>${fmt(v)} ${unit[n.unit] || esc(n.unit)}</b>${hasTarget ? ` <span>из ${fmt(target)} ${unit[n.unit] || ''}${limit ? ' · предел' : ''}</span>` : ''}</div>
-      <div class="nutrient-track" ${hasTarget && !unknown ? `role="progressbar" aria-label="${esc(n.name)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.min(100, r0(pct))}" aria-valuetext="${r0(pct)} процентов"` : ''}><i class="${unknown ? 'partial' : limit && pct > 100 ? 'over' : !limit && pct < 90 ? 'low' : ''}" style="width:${unknown || !hasTarget ? 0 : Math.min(100, pct)}%"></i></div>
-      <p class="nutrient-status">${status}${!unknown && hasTarget && !limit && left > 0 ? ` · до ориентира ${fmt(left)} ${unit[n.unit] || ''}` : ''}</p></article>`;
+    const v = a.values[n.id] || 0, unknown = a.missing[n.id], range = a.ranges[n.id] || {};
+    const r = RacionAnalytics.assess(v, range, unknown), u = unit[n.unit] || n.unit;
+    const minimum = r.min == null ? 'Нижняя граница не задана' : `От ${fmt(r.min)} ${u}`;
+    const maximum = r.max == null ? 'Верхняя граница не задана' : `До ${fmt(r.max)} ${u}`;
+    const alert = a.excursions[n.id], above = alert?.highDays > 0;
+    const title = above && r.state === 'normal' ? 'В среднем — норма' : r.label;
+    const shortfall = r.state === 'low' ? `До нижней границы ${fmt(r.min - v)} ${u}.` : r.state === 'high' ? `Выше верхней границы на ${fmt(v - r.max)} ${u}.` : '';
+    const names = above ? Object.values(alert.people).join(', ') : '';
+    return `<article class="nutrient state-${r.state}" data-nutrient="${n.id}"><div class="nutrient-head"><h4>${esc(n.name)}</h4><span class="range-state">${title}</span></div>
+      <div class="nutrient-amount">${unknown ? 'Не менее ' : ''}<b>${fmt(v)} ${esc(u)}</b><span> за выбранный период</span></div>
+      <div class="nutrient-band" role="img" aria-label="${esc(n.name + ': ' + title + '. ' + minimum + '. ' + maximum)}">
+        <span class="range-zone range-low${r.min == null ? ' unavailable' : ''}"></span><span class="range-zone range-normal${r.min == null && r.max == null ? ' unavailable' : ''}"></span><span class="range-zone range-high${r.max == null ? ' unavailable' : ''}"></span>
+        ${r.position == null ? '' : `<i class="range-marker" style="left:${r.position}%" aria-hidden="true"></i>`}</div>
+      <div class="range-labels" aria-hidden="true"><span>${r.min == null ? '—' : 'Недостаток'}</span><span>${r.min == null && r.max == null ? 'Нет нормы' : 'Норма'}</span><span>${r.max == null ? '—' : 'Избыток'}</span></div>
+      <div class="range-bounds"><span>${minimum}</span><span>${maximum}</span></div>
+      ${shortfall ? `<p class="nutrient-status">${shortfall}</p>` : ''}
+      ${above ? `<p class="range-alert">Превышения дневной границы: ${Object.keys(alert.dates).length} ${ruDays(Object.keys(alert.dates).length)}${selected === 'all' ? ` · ${esc(names)}` : ''}. Они не компенсируются другими днями.</p>` : ''}
+      ${range.note ? `<p class="nutrient-status">${esc(range.note)}</p>` : ''}
+      ${r.max == null && n.group === 'amino' && r.min != null ? '<p class="nutrient-status">Верхний предел для этой аминокислоты в отчёте не установлен.</p>' : ''}</article>`;
   };
   $('#view').innerHTML = `${appbar('Аналитика', 'Питание в цифрах')}
     <div class="analytics-controls"><label>Период<select id="a-period"><option value="week"${period === 'week' ? ' selected' : ''}>Последние 7 дней</option><option value="month"${period === 'month' ? ' selected' : ''}>Последние 30 дней</option><option value="all"${period === 'all' ? ' selected' : ''}>За всё время</option></select></label>
     <label>Кто ест<select id="a-person"><option value="all">Вся семья</option>${Object.entries(people).map(([id, name]) => `<option value="${esc(id)}"${selected === id ? ' selected' : ''}>${esc(name)}</option>`).join('')}</select></label></div>
     <section class="analytics-summary"><b>${a.days}</b><div>дней с сохранённым рационом<p>${period === 'all' ? 'За всё время использования' : period === 'week' ? 'За последние 7 дней' : 'За последние 30 дней'}</p></div></section>
-    <p class="hint analytics-note">По сохранённому рациону до сегодняшнего дня, включая неотмеченные приёмы. Пропущенные блюда исключены. Это состав меню, а не подтверждение съеденного. Ориентиры суммируются только за дни с данными.</p>
-    ${!a.days ? '<div class="empty"><h3>Здесь появится ваша аналитика</h3><p>Соберите рацион на сегодня. Витамины, минералы и аминокислоты появятся здесь автоматически.</p></div>' : groups.map(([g, title]) => `<section class="nutrient-group"><h3>${title}</h3>${RacionAnalytics.data.nutrients.filter(n => n.group === g).map(card).join('')}</section>`).join('')}
-    <p class="hint analytics-note">История за месяц и всё время накапливается на этом устройстве с версии 0.10.0. Доступные прошлые 7 дней перенесены. Полный состав рассчитан по ингредиентам и справочнику проекта; неизвестные значения не считаются нулевыми. Проценты — сравнение с ориентирами проекта, а не диагноз.</p>`;
+    <p class="hint analytics-note">По сохранённому рациону до сегодняшнего дня, включая неотмеченные приёмы. Пропущенные блюда исключены. Это состав меню, а не подтверждение съеденного. Границы суммируются за дни с данными, с учётом норм каждого человека. 100% потребности не означает верхний предел.</p>
+    ${!a.days ? `<div class="empty"><h3>${selected === 'all' ? 'Здесь появится ваша аналитика' : esc(people[selected]) + ': пока нет данных'}</h3><p>За выбранный период нет сохранённого рациона. Нули не считаются недостатком.</p></div>` : groups.map(([g, title]) => `<section class="nutrient-group"><h3>${title}</h3>${RacionAnalytics.data.nutrients.filter(n => n.group === g).map(card).join('')}</section>`).join('')}
+    <p class="hint analytics-note">Верхние границы — из отчётов проекта, система NASEM; рабочие коридоры отмечены отдельно. Пределы только для добавок не применяются к обычной пище. Отсутствие верхней границы не означает, что любое количество полезно. Старая история сохраняет прежние ориентиры; возрастные пределы без исторических данных не выдумываются. Аналитика не ставит диагноз.</p>`;
   $('#a-period').onchange = e => { S.ui.analyticsPeriod = e.target.value; save(); render(); };
   $('#a-person').onchange = e => { S.ui.analyticsPerson = e.target.value; save(); render(); };
 }
@@ -1559,7 +1572,7 @@ function viewSettings() {
     v.innerHTML = `${appbar('Настройки', 'Профиль и приложение', {back: true})}
     <button class="profile" data-person="${me.id}"><span class="mono">${esc(me.name.slice(0, 1).toUpperCase())}</span><span><b>${esc(me.name)}</b><small>${r0(t.E)} ккал · белок ${r0(t.P)} г в день</small></span>${ic('chev', 'sm')}</button>
     <nav class="rows">${SET_PAGES.map(([k, t, s]) => `<button class="row" data-set="${k}"><span class="medal">${ic(SET_IC[k])}</span><span><b>${t}</b><small>${s}</small></span>${ic('chev', 'sm')}</button>`).join('')}</nav>
-    <p class="hint center">Мой рацион · версия 0.10.0</p>`;
+    <p class="hint center">Мой рацион · версия 0.10.1</p>`;
     v.querySelectorAll('[data-set]').forEach(b => b.onclick = () => { S.ui.set = b.dataset.set; save(); render(); });
     v.querySelector('[data-person]').onclick = () => editPerson(me);
     return;
