@@ -59,10 +59,10 @@ function personTargets(p, goal) {
 
 /* ---------- Состояние ---------- */
 const defaults = () => ({
-  theme: 'light', accent: 'gold', onboarded: false,
+  theme: 'garden', themeV: 0, accent: 'gold', onboarded: false,
   people: [],
   settings: {meals: 4, mealsAuto: false, planLen: 7, norms: 'NASEM', diet: 'all', forbidden: [], allergens: [], medical: {}, accessKey: '', serverUrl: DEFAULT_SERVER, botUrl: ''},
-  marks: {like: [], notes: {}},
+  marks: {like: [], notes: {}, recent: {}},
   collect: {budget: 6000, sections: [0, 1], sectionsBySlot: {}, homeOn: false, home: [], cook2: false, otherCuisines: false},
   analytics: {v: 1, days: {}},
   lib: {}, banned: {ids: [], names: []}, cool: {}, seenEver: [], dishStore: {}, imports: [], taste: {w: {}, mode: 'self', done: false}, aiTimes: [], firstCollect: null,
@@ -86,7 +86,8 @@ try { S = Object.assign(defaults(), JSON.parse(localStorage.getItem(KEY) || '{}'
   S.ui.wishDates = [];
   delete S.ui.autoProgress;
   if (!S.srvDefault) { if (!S.settings.serverUrl) S.settings.serverUrl = DEFAULT_SERVER; S.srvDefault = 1; } // 0.8.4: адрес сервера по умолчанию (один раз)
-  if (!S.themeV) { S.theme = 'light'; S.themeV = 2; } // 0.9.3: новая светлая тема «крем, олива, коралл» — один раз для всех
+  if ((S.themeV || 0) < 3) { S.previousTheme = S.theme; S.theme = 'garden'; S.themeV = 3; }
+  S.marks.recent = S.marks.recent || {};
   if (S.srvDefault < 2) { if (S.settings.serverUrl.trim().replace(/\/$/, '') === OLD_SERVER) S.settings.serverUrl = DEFAULT_SERVER; S.srvDefault = 2; } // 0.9.2: старый адрес → переходник
   if (!Array.isArray(S.collect.sections) || !S.collect.sections.length) S.collect.sections = typeof S.collect.section === 'number' ? Array.from({length: S.collect.section + 1}, (_, i) => i) : [0, 1];
   delete S.collect.section; delete S.collect.cuisine;
@@ -133,6 +134,13 @@ const CUISINES = ['Русская', 'Средиземноморская', 'Ев�
 const SEC_TIME = [['15', 'минут'], ['30', 'минут'], ['60', 'минут'], ['∞', 'шедевр']]; // подписи на кнопках сложности
 const SECTIONS = [['Простое', 'до 15 мин'], ['Среднее', 'до 30 мин'], ['Сложное', 'до часа'], ['Шедевр', 'любое время']];
 const sectionOf = d => d.section != null ? d.section : d.time <= 15 && d.diff <= 2 ? 0 : d.time <= 30 && d.diff <= 5 ? 1 : d.time <= 60 && d.diff <= 7 ? 2 : 3;
+// Проверяем и раздел сервера, и реальные пределы: ошибочная метка «15 минут» не пропустит 25-минутное блюдо.
+function cookingFits(d, slot) {
+  const selected = secs(slot), section = sectionOf(d), limits = [[15, 2], [30, 5], [60, 7], [Infinity, Infinity]];
+  if (!selected.includes(section) || !limits[section]) return false;
+  const [time, diff] = limits[section];
+  return Number.isFinite(d.time) && d.time >= 0 && d.time <= time && Number.isFinite(d.diff) && d.diff >= 0 && d.diff <= diff;
+}
 const ALLERGENS = [['milk', 'Молоко (белок)'], ['lactose', 'Лактоза'], ['eggs', 'Яйца'], ['nuts', 'Орехи'], ['peanut', 'Арахис'], ['fish', 'Рыба'], ['seafood', 'Морепродукты'], ['gluten', 'Глютен'], ['soy', 'Соя'], ['sesame', 'Кунжут'], ['citrus', 'Цитрусы']];
 const ALG_ING = {milk: ['cottage', 'yogurt', 'kefir', 'milk', 'cheese', 'sourcream', 'butter'], lactose: ['cottage', 'yogurt', 'kefir', 'milk', 'sourcream'], eggs: ['eggs'], nuts: ['walnuts', 'almonds'], fish: ['salmon', 'mackerel', 'cod', 'tuna'], gluten: ['oat', 'bulgur', 'pasta', 'bread', 'lavash'], soy: ['tofu'], citrus: ['lemon', 'orange']};
 const ALG_RX = {milk: /молок|творог|йогурт|кефир|сыр|сметан|сливк|сливочн/i, lactose: /молок|творог|йогурт|кефир|сметан|сливк/i, eggs: /яйц|яич/i, nuts: /орех|миндал|фундук|кешью|фисташ|пекан/i, peanut: /арахис/i,
@@ -271,6 +279,7 @@ function withSalt(d) { // соль по вкусу: старые копии с �
   if (d.saltOrig == null) return d; const c = Object.assign({}, d, {salt: d.saltOrig}); delete c.saltOrig; return c;
 }
 function safePlace(day, slotIdx, dish, extra) { // ставит блюдо только после проверки; возвращает false и причину, если нельзя
+  if (!dish || !dish.types.includes(pattern()[slotIdx][0]) || !cookingFits(dish, slotIdx)) return {ok: false, why: 'Блюдо не подходит под выбранный приём, время готовки или сложность.'};
   const r = safeFit(dish, day, slotIdx); if (!r.ok) return r;
   S.plan.days[day].slots[slotIdx] = Object.assign({dish: withSalt(dish), status: null}, extra || {});
   return r;
@@ -400,6 +409,7 @@ const DBMAP = {}; DISHES.forEach(d => { DBMAP[d.id] = resolveDish(d); });
 const getDish = id => DBMAP[id] || S.dishStore[id] || null;
 function rememberDish(d) { if (!DBMAP[d.id]) S.dishStore[d.id] = d; }
 function libTake(d, type) {
+  S.marks.recent[d.id] = Date.now();
   Object.values(S.lib).forEach(sys => { const L = sys[type]; if (L) { L.main = L.main.filter(x => x !== d.id); L.sec = L.sec.filter(x => x !== d.id); } });
   const L = lib(sysKey(sectionOf(d)), type); L.main.push(d.id); while (L.main.length > capacity(type)) L.main.shift();
   rememberDish(d);
@@ -426,7 +436,7 @@ function unban(id) { const d = getDish(id); feedback(d, 'undislike'); S.banned.i
 function fitsSlot(d, ctx, relaxed) {
   if (!d || !d.types.includes(ctx.type) || isBanned(d) || !allowedByDiet(d)) return false;
   if (ctx.seen.has(d.id) || (relaxed !== 'repeat' && usedInPlan(d.id))) return false; // И2: в крайнем случае повтор блюда недели лучше пустого приёма
-  if (!secs(ctx.slot).includes(sectionOf(d))) return false;
+  if (!cookingFits(d, ctx.slot)) return false;
   if (d.src !== 'server' && budgetPenalty(d, ctx.slot) >= 99) return false; // цену новых блюд подбирает сервер по budget_left
   if (!safeFit(d, ctx.day, ctx.slot).ok) return false;
   if (!relaxed && !softOk(d, ctx.day, ctx.slot)) return false; // И9: мягкие пределы — только при обычном подборе
@@ -489,7 +499,7 @@ async function nextCard() {
   const ctx = feedCtx(F.day, F.slot);
   F.counter = (F.counter || 0) + 1;
   let dish = null, src = 'new';
-  const hq = (F.homeQueue || []).findIndex(x => x.types.includes(ctx.type) && F.day <= 1 && !ctx.seen.has(x.id));
+  const hq = (F.homeQueue || []).findIndex(x => F.day <= 1 && fitsSlot(x, ctx, 'repeat'));
   const pk = F.peek && F.peek.day === F.day && F.peek.slot === F.slot ? poolTake(F.peek.id, ctx) : null; // карточка, которая уже лежала под текущей
   F.peek = null;
   if (hq >= 0) { dish = F.homeQueue.splice(hq, 1)[0]; src = 'home'; }
@@ -631,7 +641,7 @@ async function serverNew(ctx) { // в запасе нет подходящего
   return poolPick(ctx);
 }
 async function serverLast(ctx) { // в кругах и базе пусто: одно блюдо прямо с сервера (он закрывает приём нейросетью)
-  try { const l = await fetchDishes(ctx, {count: 1}); return l.find(d => allowedByDiet(d) && !isBanned(d) && !ctx.seen.has(d.id)) || null; }
+  try { const l = await fetchDishes(ctx, {count: 1}); return l.find(d => fitsSlot(d, ctx, 'repeat')) || null; }
   catch (e) { noteServerError(e); return null; }
 }
 function noteServerError(e) {
@@ -741,7 +751,13 @@ const closeSheet = () => { const after = closeSheet.after; closeSheet.after = nu
   body.addEventListener('touchmove', e => { if (y0 == null) return; dy = e.touches[0].clientY - y0; if (dy <= 0) { card.style.transform = ''; return; } card.style.transition = 'none'; card.style.transform = `translateY(${110 * (1 - Math.exp(-dy / 110))}px)`; }, {passive: true});
   body.addEventListener('touchend', () => { if (y0 == null) return; y0 = null; card.style.transition = ''; card.style.transform = ''; if (dy > 90) closeSheet(); });
 })();
-function applyTheme() { const r = document.documentElement; if (S.theme === 'system') r.removeAttribute('data-theme'); else r.setAttribute('data-theme', S.theme); r.setAttribute('data-accent', S.accent || 'gold'); }
+function applyTheme() {
+  const r = document.documentElement;
+  if (S.theme === 'system') r.removeAttribute('data-theme'); else r.setAttribute('data-theme', S.theme);
+  r.setAttribute('data-accent', S.accent || 'gold');
+  const meta = $('meta[name="theme-color"]');
+  if (meta) meta.content = getComputedStyle(r).getPropertyValue('--bg').trim();
+}
 const IC = {
   stream: '<rect x="4" y="3" width="16" height="18" rx="3"/><path d="M8 8h8M8 12h8M8 16h5"/>',
   analytics: '<path d="M4 19.5h16M7 16V11M12 16V5M17 16V8"/>',
@@ -1225,16 +1241,26 @@ function viewCollect() {
   if (c.homeOn) { const add = () => { const n = $('#c-home').value.trim(); if (n && !c.home.includes(n)) c.home.push(n); save(); render(); }; $('#c-home-add').onclick = add; $('#c-home').onkeydown = e => { if (e.key === 'Enter') add(); }; v.querySelectorAll('[data-rmhome]').forEach(b => b.onclick = () => { c.home.splice(+b.dataset.rmhome, 1); save(); render(); }); }
   $('#c-cook2').onclick = () => { c.cook2 = !c.cook2; save(); render(); }; $('#c-other').onclick = () => { c.otherCuisines = !c.otherCuisines; save(); render(); };
 }
+function favoriteDishes() {
+  const taste = typeof TT_SET === 'undefined' ? [] : TT_SET, rows = new Map();
+  const add = (d, at = 0, liked = false) => {
+    if (!d || !Array.isArray(d.ing) || isBanned(d) || !allowedByDiet(d)) return;
+    const photo = taste.find(t => t.id === d.id || nameKey(t.name) === nameKey(d.name)), old = rows.get(d.id);
+    rows.set(d.id, {dish: d, at: Math.max(at, S.marks.recent[d.id] || 0, old?.at || 0), liked: liked || old?.liked || false, image: photo ? 'img/tt/' + photo.id + '.webp' : ''});
+  };
+  (S.taste.profile?.liked || []).forEach((id, i) => add(getDish(id) || taste.find(d => d.id === id), (S.taste.profile.at || 0) + i, true));
+  Object.values(S.lib).forEach(sys => Object.values(sys).forEach(l => [...l.sec, ...l.main].forEach(id => add(getDish(id)))));
+  [S.lastWeek, S.plan].filter(Boolean).forEach(plan => plan.days.forEach((day, i) => day.slots.forEach((sl, j) => { if (sl) add(sl.dish, new Date(plan.start + 'T00:00:00').getTime() + i * plan.meals + j); })));
+  Object.values(S.dishStore).filter(d => S.marks.like.includes(d.name)).forEach(d => add(d, 0, true));
+  return [...rows.values()].sort((a, b) => b.at - a.at || a.dish.name.localeCompare(b.dish.name, 'ru'));
+}
 function wishFavorites() {
-  const ids = new Set(Object.values(S.lib).flatMap(sys => Object.values(sys).flatMap(l => [...l.main, ...l.sec])));
-  const past = (S.lastWeek?.days || []).flatMap(d => d.slots).filter(Boolean);
-  [...allSlots(), ...past].forEach(sl => { rememberDish(sl.dish); ids.add(sl.dish.id); });
-  Object.values(S.dishStore).filter(d => S.marks.like.includes(d.name)).forEach(d => ids.add(d.id));
-  const list = [...ids].map(getDish).filter(d => d && !isBanned(d) && allowedByDiet(d)).sort((a, b) => Number(S.marks.like.includes(b.name)) - Number(S.marks.like.includes(a.name)) || a.name.localeCompare(b.name, 'ru'));
-  sheet(`<p class="eyebrow">Избранное и выбранное ранее</p><h3>Ваши блюда</h3>${list.length ? '<label class="sublabel">Поиск<input id="fav-search" placeholder="Название блюда"></label><div class="pick" id="fav-list"></div>' : '<p class="hint">Пока здесь пусто. Выбранные блюда и ваши любимые появятся в этом списке.</p>'}`, b => {
+  const list = favoriteDishes();
+  sheet(`<p class="eyebrow">Ваши вкусы</p><h3>Избранные блюда</h3><p class="hint">Лайки из знакомства и выбранные блюда. Сначала недавние. Нажмите на карточку, затем выберите приём и даты.</p>${list.length ? '<label class="sublabel">Поиск<input id="fav-search" placeholder="Название блюда"></label><div class="favorite-feed" id="fav-list"></div>' : '<p class="hint">Пока здесь пусто. Понравившиеся блюда из знакомства и выбранные рецепты появятся здесь.</p>'}`, b => {
     if (!list.length) return;
-    const paint = () => { const q = $('#fav-search', b).value.toLowerCase().trim(), matches = list.filter(d => d.name.toLowerCase().includes(q)); $('#fav-list', b).innerHTML = matches.map(d => `<button class="pickrow" data-fav="${esc(d.id)}"><b>${S.marks.like.includes(d.name) ? '♥ ' : ''}${esc(d.name)}</b><span>${d.time} мин</span></button>`).join('') || '<p class="hint">Ничего не найдено</p>';
-      b.querySelectorAll('[data-fav]').forEach(x => x.onclick = () => { const d = getDish(x.dataset.fav); S.ui.wishName = d.name; S.ui.wishDishId = d.id; if (!d.types.includes(S.ui.wishType || 'b')) S.ui.wishType = pattern().find(m => d.types.includes(m[0]))?.[0] || pattern()[0][0]; save(); closeSheet(); render(); }); };
+    const paint = () => { const q = $('#fav-search', b).value.toLocaleLowerCase('ru').trim(), matches = list.filter(r => r.dish.name.toLocaleLowerCase('ru').includes(q)); $('#fav-list', b).innerHTML = matches.map(({dish: d, image, liked}) => `<button class="favorite-card" data-fav="${esc(d.id)}"><span class="favorite-photo">${image ? `<img src="${esc(image)}" alt="" loading="lazy">` : ic('dish')}<span class="favorite-no-photo"${image ? ' hidden' : ''}>Фото пока нет</span></span><span class="favorite-caption"><small>${liked ? '♥ Нравится' : 'Выбирали раньше'}</small><b>${esc(d.name)}</b><span>${d.time} мин · ${SECTIONS[sectionOf(d)][0]}</span></span>${ic('plus')}</button>`).join('') || '<p class="hint">Ничего не найдено</p>';
+      b.querySelectorAll('.favorite-photo img').forEach(img => img.onerror = () => { const caption = img.parentElement.querySelector('.favorite-no-photo'); if (caption) caption.hidden = false; img.remove(); });
+      b.querySelectorAll('[data-fav]').forEach(x => x.onclick = () => { const d = list.find(r => r.dish.id === x.dataset.fav).dish; if (Array.isArray(d.steps) && d.steps.length) rememberDish(d); S.ui.wishName = d.name; S.ui.wishDishId = getDish(d.id) ? d.id : null; if (!d.types.includes(S.ui.wishType || 'b')) S.ui.wishType = pattern().find(m => d.types.includes(m[0]))?.[0] || pattern()[0][0]; save(); closeSheet(); render(); }); };
     $('#fav-search', b).oninput = paint; paint();
   });
 }
@@ -1320,7 +1346,7 @@ async function addDesired(name, type, dates = []) {
   const buttons = ['#c-wish-add', '#c-wish-fav', '#c-auto', '#c-go']; buttons.forEach(q => { const el = $(q); if (el) el.disabled = true; });
   let added = 0, lastError = '';
   try {
-    const saved = S.ui.wishDishId && getDish(S.ui.wishDishId), favorite = saved && nameKey(saved.name) === nameKey(name) ? saved : null;
+    const saved = S.ui.wishDishId && getDish(S.ui.wishDishId); let favorite = saved && nameKey(saved.name) === nameKey(name) ? saved : null;
     for (const {day, slot} of targets) {
       if (S.plan !== plan) break;
       const ctx = {day, slot, type, tg: slotTarget(day, slot), seen: new Set()};
@@ -1328,7 +1354,8 @@ async function addDesired(name, type, dates = []) {
       if (!d && Server.on()) { toast('Ищу блюдо…'); try { d = (await fetchDishes(ctx, {wish: name, count: 1}))[0]; } catch (e) { lastError = e.message; if (KEY_ERRORS.includes(e.code)) { accessSheet(e.code, () => addDesired(name, type, dates)); break; } continue; } }
       if (!d && !Server.on()) d = [...Object.values(DBMAP), ...Object.values(S.dishStore)].find(x => nameKey(x.name).includes(nameKey(name)));
       if (S.plan !== plan) break;
-      if (!d || !d.types.includes(type) || isBanned(d) || !allowedByDiet(d) || !secs(slot).includes(sectionOf(d))) { lastError = 'Блюдо не подходит под выбранный приём, время готовки или исключения.'; continue; }
+      if (!d || !d.types.includes(type) || isBanned(d) || !allowedByDiet(d) || !cookingFits(d, slot)) { lastError = 'Блюдо не подходит под выбранный приём, время готовки или исключения.'; continue; }
+      favorite = d;
       if (!safePlace(day, slot, d, {fromDesired: true}).ok) { lastError = 'Блюдо не подходит по ограничениям этого дня.'; continue; }
       libTake(d, type); feedback(d, 'take'); if (!S.seenEver.includes(d.id)) S.seenEver.push(d.id); added++; save();
     }
@@ -1516,7 +1543,7 @@ async function refuseCard(hard) {
   F.card = null; F.peek = null; save(); await withLoading(nextCard);
 }
 function pickSeen() {
-  const F = S.feed, list = (F.seen[F.day + '-' + F.slot] || []).map(getDish).filter(d => d && !isBanned(d) && allowedByDiet(d) && safeFit(d, F.day, F.slot).ok);
+  const F = S.feed, list = (F.seen[F.day + '-' + F.slot] || []).map(getDish).filter(d => d && d.types.includes(pattern()[F.slot][0]) && cookingFits(d, F.slot) && !isBanned(d) && allowedByDiet(d) && safeFit(d, F.day, F.slot).ok);
   if (!list.length) { toast('Ещё нет показанных блюд'); return; }
   sheet(`<h3>Показанные блюда</h3><div class="pick">${list.map((d, i) => { const n = nut(d, famFactor(d, F.slot)); return `<button class="pickrow" data-pick="${i}"><b>${esc(d.name)}</b><span>${kbju(n)}</span></button>`; }).join('')}</div>`, b => {
     b.querySelectorAll('[data-pick]').forEach(x => x.onclick = () => { F.card = {dish: list[+x.dataset.pick], src: 'seen'}; F.exhausted = false; closeSheet(); takeCard(); });
@@ -1529,7 +1556,7 @@ function markSheet() {
   <label class="sublabel">Своя пометка<textarea id="mk-note" rows="3" placeholder="Например: делать без лука, детям меньше острого">${esc(S.marks.notes[d.id] || '')}</textarea></label>
   <div class="actions"><button class="btn primary" id="mk-save">Сохранить пометку</button></div>
   <details><summary>Аллергия на ингредиент</summary><div class="pick">${d.ing.map(i => `<button class="pickrow" data-a="${esc(i.name)}"><b>${esc(i.name)}</b></button>`).join('')}</div></details>`, b => {
-    $('#mk-like', b).onclick = () => { const a = S.marks.like; liked ? a.splice(a.indexOf(d.name), 1) : a.push(d.name); save(); closeSheet(); render(); toast(liked ? 'Пометка снята' : 'Отмечено: нравится'); };
+    $('#mk-like', b).onclick = () => { const a = S.marks.like; liked ? a.splice(a.indexOf(d.name), 1) : a.push(d.name); if (!liked) S.marks.recent[d.id] = Date.now(); rememberDish(d); save(); closeSheet(); render(); toast(liked ? 'Пометка снята' : 'Отмечено: нравится'); };
     $('#mk-save', b).onclick = () => { const t = $('#mk-note', b).value.trim(); if (t) S.marks.notes[d.id] = t; else delete S.marks.notes[d.id]; rememberDish(d); save(); closeSheet(); render(); toast('Пометка сохранена'); };
     b.querySelectorAll('[data-a]').forEach(y => y.onclick = () => { if (!S.settings.forbidden.includes(y.dataset.a)) S.settings.forbidden.push(y.dataset.a); save(); closeSheet(); toast('Исключено для всей семьи'); refuseCard(false); });
   });
@@ -1625,7 +1652,7 @@ function cheapen() {
   let n = 0;
   slots.slice(0, 5).forEach(s => { const type = pattern()[s.i][0], cur = S.plan.days[s.di].slots[s.i];
     const alt = (Server.on() ? Object.values(S.dishStore).filter(x => x.src === 'server') : Object.values(DBMAP)).filter(d => d.types.includes(type) && allowedByDiet(d) && !isBanned(d) && d.id !== cur.dish.id && !usedInPlan(d.id))
-      .map(d => ({d, p: famCost(d)})).filter(x => x.p < s.price * 0.8 && safeFit(x.d, s.di, s.i).ok).sort((a, b) => a.p - b.p)[0];
+      .map(d => ({d, p: famCost(d)})).filter(x => cookingFits(x.d, s.i) && x.p < s.price * 0.8 && safeFit(x.d, s.di, s.i).ok).sort((a, b) => a.p - b.p)[0];
     if (alt) { const nx = S.plan.days[s.di + 1], lo = nx && nx.slots[s.i];
       if (lo && lo.leftover && lo.dish.id === cur.dish.id) { nx.slots[s.i] = null; safePlace(s.di + 1, s.i, alt.d, {leftover: true}); }
       S.plan.days[s.di].slots[s.i] = {dish: withSalt(alt.d), status: null, fromDesired: false}; n++; } });
@@ -1642,7 +1669,7 @@ function viewSettings() {
     v.innerHTML = `${appbar('Настройки', 'Профиль и приложение', {back: true})}
     <button class="profile" data-person="${me.id}"><span class="mono">${esc(me.name.slice(0, 1).toUpperCase())}</span><span><b>${esc(me.name)}</b><small>${r0(t.E)} ккал · белок ${r0(t.P)} г в день</small></span>${ic('chev', 'sm')}</button>
     <nav class="rows">${SET_PAGES.map(([k, t, s]) => `<button class="row" data-set="${k}"><span class="medal">${ic(SET_IC[k])}</span><span><b>${t}</b><small>${s}</small></span>${ic('chev', 'sm')}</button>`).join('')}</nav>
-    <p class="hint center">Мой рацион · версия 0.10.2</p>`;
+    <p class="hint center">Мой рацион · версия 0.11.0</p>`;
     v.querySelectorAll('[data-set]').forEach(b => b.onclick = () => { S.ui.set = b.dataset.set; save(); render(); });
     v.querySelector('[data-person]').onclick = () => editPerson(me);
     return;
@@ -1650,8 +1677,8 @@ function viewSettings() {
   const title = SET_PAGES.find(x => x[0] === pg)[1];
   const meds = [['kidney','Болезни почек'],['diabetes','Диабет на инсулине или сульфонилмочевине'],['ed','Расстройство пищевого поведения'],['preg','Беременность или кормление'],['warfarin','Приём варфарина'],['gi','Целиакия, подагра, тяжёлые болезни печени или ЖКТ']];
   let body = '';
-  if (pg === 'look') body = `<h4>Тема</h4><div class="themes">${[['light','Светлая','Крем, олива, коралл'],['dark','Тёмная','Графит и золото'],['system','Как в системе','Меняется сама']].map(([k, t, s]) => `<button class="theme-card t-${k}${S.theme === k ? ' on' : ''}" data-theme-set="${k}"><i></i><b>${t}</b><small>${s}</small></button>`).join('')}</div>
-    <h4>Акцент</h4><div class="accents">${[['gold','Классическое золото'],['champagne','Шампань'],['rose','Розовое золото']].map(([k, t]) => `<button class="accent a-${k}${(S.accent || 'gold') === k ? ' on' : ''}" data-accent="${k}"><i></i><span>${t}</span></button>`).join('')}</div>`;
+  if (pg === 'look') body = `<h4>Тема</h4><div class="themes">${[['garden','Зелёный сад','Лес, шалфей и белый'],['light','Светлая','Крем, олива, коралл'],['dark','Тёмная','Графит и золото'],['system','Как в системе','Меняется сама']].map(([k, t, s]) => `<button class="theme-card t-${k}${S.theme === k ? ' on' : ''}" data-theme-set="${k}"><i></i><b>${t}</b><small>${s}</small></button>`).join('')}</div>
+    ${S.theme === 'garden' ? '<p class="hint">Новая тема по умолчанию. Лесной зелёный, светлый шалфей и белый; мягкий жёлтый для предупреждений. Прежние темы доступны выше.</p>' : `<h4>Акцент</h4><div class="accents">${[['gold','Классическое золото'],['champagne','Шампань'],['rose','Розовое золото']].map(([k, t]) => `<button class="accent a-${k}${(S.accent || 'gold') === k ? ' on' : ''}" data-accent="${k}"><i></i><span>${t}</span></button>`).join('')}</div>`}`;
   if (pg === 'family') body = `<ul class="people">${S.people.map(p => { const t = personTargets(p); return `<li><button data-person="${p.id}"><span class="mono">${esc(p.name.slice(0, 1).toUpperCase())}</span><span><b>${esc(p.name)}</b><small>${p.sex === 'm' ? 'М' : 'Ж'}, ${p.age} лет, ${p.weight} кг · ${r0(t.E)} ккал, белок ${r0(t.P)} г</small></span>${ic('chev', 'sm')}</button></li>`; }).join('')}</ul>
     ${S.people.length < 10 ? '<button class="btn ghost wide" id="st-add">Добавить человека</button>' : '<p class="hint">Максимум 10 человек.</p>'}
     <p class="hint">Блюда общие для всей семьи, порции считаются по нормам каждого.</p>`;
