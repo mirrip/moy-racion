@@ -3,14 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#f4f8f1">
+<meta name="theme-color" content="#071f18">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon.svg">
 <title>Мой рацион</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,500;0,600;1,500&family=Manrope:wght@400;500;600;700&display=swap">
 <style>
-/* Макет: мобильное приложение в одну колонку. Тёмная = графит и золото, светлая = крем, олива, коралл (светлая тема по умолчанию). Мягкие скругления, золотые градиентные кромки, засечки Lora для заголовков, Manrope для текста. */
+/* Мобильное приложение в одну колонку. По умолчанию — «Зелёный бархат»; сохранены светлая, тёмная и системная темы. Manrope для текста, в прежних темах заголовки Lora. */
 :root {
   --bg: #0b0a09; --surface: #151311; --surface2: #1d1a17; --fg: #f4ede1; --muted: #a39b8f;
   --line: rgba(255, 238, 205, .08); --gold: #d6b26a; --gold-hi: #f1d896; --gold-lo: #9c7a3a;
@@ -49,16 +49,18 @@
   :root:not([data-theme])[data-accent="champagne"] { --gold: #9b8150; --gold-hi: #bfa36c; --gold-lo: #765f36; --gold-a: rgba(155, 129, 80, .6); --gold-b: rgba(155, 129, 80, .2); }
   :root:not([data-theme])[data-accent="rose"] { --gold: #a8624d; --gold-hi: #c98670; --gold-lo: #7f4636; --gold-a: rgba(168, 98, 77, .55); --gold-b: rgba(168, 98, 77, .2); }
 }
-/* «Зелёный сад»: самостоятельная палитра с постоянными контрастными парами. */
+/* «Зелёный бархат»: зелёные поверхности, светящийся шалфей, светлый текст. */
 :root[data-theme="garden"] {
-  --bg: #f4f8f1; --surface: #ffffff; --surface2: #edf4e8; --fg: #193c30; --muted: #53695c;
-  --line: #dce6d8; --gold: #245c43; --gold-hi: #337450; --gold-lo: #174b3b;
-  --gold-a: rgba(36, 92, 67, .36); --gold-b: #dceecb; --on-gold: #ffffff;
-  --good: #2d6845; --warn: #8c5d13; --shade: rgba(23, 75, 59, .18); --glow: #e2efd6;
-  --olive: #356646; --olive-b: #edf4da;
-  --gg: linear-gradient(125deg, #245c43, #174b3b); --edge: linear-gradient(#dce6d8, #dce6d8);
-  --display: "Manrope", system-ui, sans-serif; --r: 22px; --r-sm: 14px;
-  color-scheme: light;
+  --bg: #071f18; --surface: #10372a; --surface2: #194b37; --fg: #edf6ec; --muted: #afc7b7;
+  --line: #325943; --gold: #c2ee96; --gold-hi: #defbb9; --gold-lo: #86c766;
+  --gold-a: rgba(174, 230, 124, .4); --gold-b: rgba(183, 236, 145, .13); --on-gold: #112c1d;
+  --good: #b9e98e; --warn: #ebcd8e; --shade: rgba(0, 15, 9, .65); --glow: rgba(103, 170, 94, .19);
+  --olive: #a6d894; --olive-b: rgba(131, 191, 111, .14);
+  --gg: linear-gradient(120deg, #d5f8ad, #a8df83 58%, #8dcb6c);
+  --edge: linear-gradient(135deg, #4b7350, #224733 48%, #365c40);
+  --velvet: radial-gradient(ellipse at 0% 0%, rgba(123, 183, 100, .10), transparent 68%), linear-gradient(145deg, #153e2e, #0e3025);
+  --display: "Manrope", system-ui, sans-serif; --r: 26px; --r-sm: 16px;
+  color-scheme: dark;
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -364,7 +366,7 @@ body.feeding { overflow: hidden; overscroll-behavior: none; }
 .t-dark i { background: radial-gradient(90% 60% at 50% 0%, rgba(214, 178, 106, .35), transparent 70%), #0b0a09; }
 .t-light i { background: radial-gradient(90% 60% at 50% 0%, rgba(201, 165, 90, .4), transparent 70%), #e9e4db; }
 .t-system i { background: linear-gradient(90deg, #0b0a09 50%, #e9e4db 50%); }
-.t-garden i { background: linear-gradient(125deg, #174b3b 0% 40%, #dceecb 40% 72%, #fff 72% 90%, #f2cf66 90%); }
+.t-garden i { background: radial-gradient(ellipse at 75% 15%, #c2ee96, transparent 55%), linear-gradient(125deg, #071f18, #245b39); box-shadow: inset 0 1px 1px #749464; }
 .theme-card b { font-size: 0.86rem; } .theme-card small { font-size: 0.72rem; color: var(--muted); }
 .theme-card.on, .accent.on { border-color: transparent; background: linear-gradient(var(--surface), var(--surface)) padding-box, var(--gg) border-box; }
 .accents { display: grid; gap: 8px; }
@@ -542,25 +544,52 @@ html, body, * { scrollbar-width: none; -ms-overflow-style: none; }
 body.empty-stream, body.empty-stream #scroller, body.empty-stream #view { background: #fff; }
 .stream-blank { min-height: calc(100dvh - 130px); background: #fff; }
 @media (max-width: 350px) { .tab { font-size: .59rem; } .collect-actions .big { font-size: .8rem; } .wish-calendar-head { font-size: .7rem; } }
+:root[data-theme="garden"] body { background: radial-gradient(ellipse at 90% -5%, rgba(134, 192, 90, .16), transparent 48%), radial-gradient(ellipse at 0% 55%, rgba(38, 101, 64, .15), transparent 60%), repeating-linear-gradient(112deg, rgba(151, 202, 131, .012) 0 1px, transparent 1px 4px), #071f18; }
 :root[data-theme="garden"] h1, :root[data-theme="garden"] h2, :root[data-theme="garden"] h3 { font-weight: 700; letter-spacing: -.035em; }
-:root[data-theme="garden"] .appbar .gt { background: none; color: #174b3b; }
-:root[data-theme="garden"] .eyebrow { letter-spacing: .12em; }
-:root[data-theme="garden"] .btn.primary { box-shadow: 0 6px 16px -10px var(--gold-a); }
-:root[data-theme="garden"] .secbtn.on { background: #dceecb; color: #174b3b; border-color: #8eb77b; }
-:root[data-theme="garden"] .iconbtn { background: #ffffff; border-color: var(--line); }
-:root[data-theme="garden"] .panel { box-shadow: 0 8px 28px -22px var(--shade); }
-:root[data-theme="garden"] #nav { border-color: #dce6d8; box-shadow: 0 -6px 24px -18px var(--shade); }
-:root[data-theme="garden"] .tab[aria-current="page"] .tab-ic { background: #dceecb; }
-:root[data-theme="garden"] .budgetnote.low { background: #fff3c7; color: #765315; }
+:root[data-theme="garden"] .appbar .gt { background: none; color: var(--fg); }
+:root[data-theme="garden"] .eyebrow { letter-spacing: .15em; color: #b8d5a8; }
+:root[data-theme="garden"] .panel, :root[data-theme="garden"] .meal, :root[data-theme="garden"] .summary, :root[data-theme="garden"] .empty, :root[data-theme="garden"] .nutrient, :root[data-theme="garden"] .favorite-card, :root[data-theme="garden"] .dcard, :root[data-theme="garden"] .tt-card { background: var(--velvet) padding-box, var(--edge) border-box; border-color: transparent; box-shadow: inset 0 1px 0 rgba(183, 230, 148, .05), 0 18px 32px -26px #001208; }
+:root[data-theme="garden"] .btn { border-radius: 20px 8px 20px 8px; border-color: #456847; background: linear-gradient(140deg, #1d5037, #123c2b); }
+:root[data-theme="garden"] .btn.primary { background: var(--gg); border-color: #abd68d; color: var(--on-gold); box-shadow: inset 0 1px 0 #e3ffc9, inset 0 -2px 4px rgba(43, 99, 37, .12), 0 6px 24px -14px rgba(171, 229, 118, .65); }
+:root[data-theme="garden"] .btn.ghost { background: linear-gradient(135deg, rgba(48, 99, 60, .24), rgba(11, 45, 31, .6)); color: #d6edcd; border-color: #456847; }
+:root[data-theme="garden"] .btn:not(:disabled):hover, :root[data-theme="garden"] .favorite-card:hover { border-color: #a0cd80; }
+:root[data-theme="garden"] .btn:not(:disabled):active { transform: translateY(1px); }
+:root[data-theme="garden"] .iconbtn, :root[data-theme="garden"] .addbtn { border-radius: 16px 7px 16px 7px; background: linear-gradient(145deg, #27583c, #123725); border: 1px solid #456847; color: #c2ee96; }
+:root[data-theme="garden"] input, :root[data-theme="garden"] textarea, :root[data-theme="garden"] select { border: 1px solid #3b6145; box-shadow: inset 0 2px 7px rgba(0, 17, 8, .16); background-color: #153d2c; color: var(--fg); border-radius: 15px 7px 15px 7px; }
+:root[data-theme="garden"] input::placeholder, :root[data-theme="garden"] textarea::placeholder { color: #9ab39e; opacity: 1; }
+:root[data-theme="garden"] .secbtn { background: linear-gradient(145deg, #1d4a32, #103423); border-color: #3b6043; border-radius: 14px 5px 14px 5px; }
+:root[data-theme="garden"] .secbtn.on { background: linear-gradient(130deg, #d1f5a9, #a0d57d); color: #173a23; border-color: #b8e198; box-shadow: inset 0 1px 0 #e1ffc2, 0 4px 12px -8px #b4ef84; }
+:root[data-theme="garden"] .secbtn.on b, :root[data-theme="garden"] .secbtn.on small { color: #173a23; opacity: 1; }
+:root[data-theme="garden"] .meal-difficulty { border-color: rgba(172, 212, 146, .14); }
+:root[data-theme="garden"] #nav { background: linear-gradient(180deg, #123725, #0a291e); border-color: #456442; box-shadow: 0 -8px 30px -16px #00150a; }
+:root[data-theme="garden"] .tab { color: #afc7b7; }
+:root[data-theme="garden"] .tab[aria-current="page"] { color: #d0f4aa; }
+:root[data-theme="garden"] .tab[aria-current="page"] .tab-ic { background: var(--gg); color: #153820; border-radius: 16px 5px 16px 5px; box-shadow: inset 0 1px 0 #e1ffc2; }
+:root[data-theme="garden"] .sheet-card { background: radial-gradient(ellipse at 50% 0, rgba(110, 169, 80, .15), transparent 45%), #0e3024; border-color: #58764e; box-shadow: 0 -22px 80px rgba(0, 12, 6, .5); }
+:root[data-theme="garden"] .sheet-grip::before { background: #749466; }
+:root[data-theme="garden"] .favorite-photo { background: linear-gradient(140deg, #2b5a3a, #123522); border-radius: 18px 7px 18px 7px; }
+:root[data-theme="garden"] .favorite-caption small { color: #b8e897; }
+:root[data-theme="garden"] .wish-day { border-radius: 13px 5px 13px 5px; background: #173d2b; }
+:root[data-theme="garden"] .wish-day.on { background: var(--gg); color: #173a23; border-color: #c2ee96; }
+:root[data-theme="garden"] .wish-day.on span, :root[data-theme="garden"] .wish-day.on small { color: #244b2b; }
+:root[data-theme="garden"] .budgetnote.low, :root[data-theme="garden"] .analytics-caution, :root[data-theme="garden"] .calendar-caution { background: #33462a; color: #e9e2bd; border-color: #6d7941; }
+:root[data-theme="garden"] .state-low .range-state { color: #ebcd8e; background: #3a4729; }
+:root[data-theme="garden"] .state-normal .range-state { color: #c2ee96; background: #244e32; }
+:root[data-theme="garden"] .state-high .range-state { color: #f2b7a6; background: #513e30; }
+:root[data-theme="garden"] .range-alert { color: #f2b7a6; }
+:root[data-theme="garden"] .day-normal { background: #305c34; color: #d5f7af; }
+:root[data-theme="garden"] .day-low { background: #514c29; color: #f3d68e; }
+:root[data-theme="garden"] .day-high { background: #603e32; color: #f6c2af; }
+:root[data-theme="garden"] body.empty-stream, :root[data-theme="garden"] body.empty-stream #scroller, :root[data-theme="garden"] body.empty-stream #view, :root[data-theme="garden"] .stream-blank { background: #071f18; }
 </style>
 </head><body>
 <div id="scroller"><div id="app"><main id="view"></main></div></div>
 <nav id="nav" aria-label="Разделы"><div></div></nav>
 <div id="sheet" hidden><div class="sheet-card" role="dialog" aria-modal="true"><div class="sheet-grip"><button class="btn ghost sm" id="sheet-close">Закрыть</button></div><div id="sheet-body"></div></div></div>
 <div id="toast" role="status" hidden></div>
-<script src="data.js?v=1795522827"></script>
-<script src="nutrition-data.js?v=1795522827"></script>
-<script src="analytics.js?v=1795522827"></script>
-<script src="app.js?v=1795522827"></script>
+<script src="data.js?v=1795523100"></script>
+<script src="nutrition-data.js?v=1795523100"></script>
+<script src="analytics.js?v=1795523100"></script>
+<script src="app.js?v=1795523100"></script>
 </body>
 </html>
