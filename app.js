@@ -730,10 +730,11 @@ function applyPrices(ids, cost) {
 /* ---------- UI: общие ---------- */
 function toast(t) { const el = $('#toast'); el.textContent = t; el.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => el.hidden = true, 2600); }
 function sheet(html, onMount, opts = {}) {
+  closeSheet.after = opts.onClose || null;
   const el = $('#sheet'); el.classList.toggle('full', !!opts.full); el.classList.remove('pulling'); $('.sheet-card').style.transform = '';
   $('#sheet-body').innerHTML = html; el.hidden = false; $('#sheet-body').scrollTop = 0; document.body.classList.add('sheeted'); onMount && onMount($('#sheet-body'));
 }
-const closeSheet = () => { $('#sheet').hidden = true; document.body.classList.remove('sheeted'); };
+const closeSheet = () => { const after = closeSheet.after; closeSheet.after = null; $('#sheet').hidden = true; document.body.classList.remove('sheeted'); if (after) after(); };
 (function pullToClose() { // полноэкранное окно: потянуть вниз от верха — закрыть
   const body = $('#sheet-body'), card = $('.sheet-card'); let y0 = null, dy = 0;
   body.addEventListener('touchstart', e => { y0 = body.scrollTop <= 0 ? e.touches[0].clientY : null; dy = 0; }, {passive: true});
@@ -1065,6 +1066,64 @@ function syncAnalytics() {
   };
   capture(S.lastWeek, false); capture(S.plan, true);
 }
+function nutrientCalendar(id, pid = 'all') {
+  const trigger = document.activeElement;
+  const n = RacionAnalytics.data.nutrients.find(n => n.id === id); if (!n) return;
+  const today = iso(new Date()), currentMonth = today.slice(0, 7);
+  const history = RacionAnalytics.history(S.analytics.days, today, pid);
+  const firstMonth = history.first?.slice(0, 7) || currentMonth;
+  let month = S.ui.nutrientMonth || currentMonth;
+  if (!/^\d{4}-\d{2}$/.test(month) || month < firstMonth || month > currentMonth) month = currentMonth;
+  let selectedDate = null, calendar = null;
+  const unit = {g: 'г', mg: 'мг', mcg: 'мкг', kcal: 'ккал'}[n.unit] || n.unit;
+  const fmt = v => new Intl.NumberFormat('ru-RU', {maximumFractionDigits: v > 0 && v < 1 ? 3 : 1}).format(v);
+  const dateLabel = date => new Date(date + 'T12:00:00').toLocaleDateString('ru-RU', {day: 'numeric', month: 'long', year: 'numeric'});
+  const symbol = state => ({normal: '✓', low: '−', high: '+', unknown: '?', unrated: '·', empty: ''})[state];
+  const who = pid === 'all' ? 'Вся семья' : S.people.find(p => p.id === pid)?.name || Object.values(S.analytics.days).find(d => d.people?.[pid])?.people[pid].name || 'Участник семьи';
+  const loadMonth = () => {
+    calendar = RacionAnalytics.calendar(S.analytics.days, month, today, pid, id);
+    selectedDate = calendar.dates.filter(d => d.state !== 'empty').slice(-1)[0]?.date || (month === currentMonth ? today : month + '-01');
+  };
+  loadMonth();
+  sheet('<div id="nutrient-calendar"></div>', body => {
+    const root = $('#nutrient-calendar', body);
+    const paint = () => {
+      const chosen = calendar.dates.find(d => d.date === selectedDate);
+      const title = new Date(month + '-01T12:00:00').toLocaleDateString('ru-RU', {month: 'long', year: 'numeric'});
+      const cells = '<span class="calendar-spacer" aria-hidden="true"></span>'.repeat(calendar.offset) + calendar.dates.map(d => `<button class="calendar-day day-${d.state}${d.date === selectedDate ? ' selected' : ''}${d.date === today ? ' today' : ''}" data-calendar-date="${d.date}" aria-pressed="${d.date === selectedDate}" aria-label="${esc(dateLabel(d.date) + ': ' + d.label)}"${d.future ? ' disabled' : ''}><b>${+d.date.slice(-2)}</b><small aria-hidden="true">${symbol(d.state)}</small></button>`).join('');
+      const personRow = p => {
+        const bounds = [p.range.min > 0 ? `от ${fmt(p.range.min)} ${unit}` : '', p.range.max > 0 ? `до ${fmt(p.range.max)} ${unit}` : ''].filter(Boolean).join(' · ');
+        return `<li><div><b>${esc(p.name)}</b><span>${fmt(p.value)} ${unit} · ${p.label}</span>${bounds ? `<small>${bounds}</small>` : ''}${Number.isInteger(p.filled) && p.meals ? `<small>Учтено приёмов: ${p.filled} из ${p.meals}</small>` : ''}</div><i class="calendar-person-dot day-${p.state}" aria-hidden="true"></i></li>`;
+      };
+      const detail = !chosen || chosen.state === 'empty'
+        ? '<p class="calendar-no-data">За этот день нет сохранённых данных. Он не считается ни недостатком, ни нормой.</p>'
+        : `<div class="calendar-day-summary"><span class="day-badge day-${chosen.state}">${chosen.label}</span><b>${chosen.missing ? 'Не менее ' : ''}${fmt(chosen.value)} ${unit}</b></div>
+          <ul class="calendar-people">${chosen.cases.map(personRow).join('')}</ul>
+          ${pid === 'all' ? '<p class="hint">Цвет дня учитывает каждого участника: избыток у одного или недостаток у другого не скрываются общей суммой.</p>' : ''}`;
+      root.innerHTML = `<p class="eyebrow">История показателя · ${esc(who)}</p><h2 class="pg-title">${esc(n.name)}</h2>
+        <p class="calendar-history">${history.first ? `Записи с ${dateLabel(history.first)} · ${history.days} ${ruDays(history.days)} с данными` : 'Записей по этому участнику пока нет'}</p>
+        ${history.days < 30 ? '<div class="calendar-caution">Менее 30 дней данных — только предварительная сводка, не устойчивая картина питания.</div>' : ''}
+        <div class="calendar-month-head"><button class="iconbtn" id="nut-month-prev" aria-label="Предыдущий месяц"${month <= firstMonth ? ' disabled' : ''}>${ic('back')}</button><h3>${title}</h3><button class="iconbtn" id="nut-month-next" aria-label="Следующий месяц"${month >= currentMonth ? ' disabled' : ''}>${ic('chev')}</button></div>
+        <div class="calendar-weekdays" aria-hidden="true">${['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].map(d => `<span>${d}</span>`).join('')}</div>
+        <div class="nutrient-calendar-grid" aria-label="Дни месяца">${cells}</div>
+        <div class="calendar-legend"><span><i class="day-normal"></i>Норма</span><span><i class="day-low"></i>Недостаток</span><span><i class="day-high"></i>Избыток</span><span><i class="day-empty"></i>Нет данных / оценки</span></div>
+        <section class="calendar-detail" aria-live="polite"><h3>${dateLabel(selectedDate)}</h3>${detail}</section>
+        <p class="hint calendar-footnote">Это состав сохранённого меню, а не подтверждение съеденного. Серые дни — нет записей, полной информации или отдельной нормы. История хранится на этом устройстве.</p>`;
+      const move = offset => {
+        const date = new Date(month + '-01T12:00:00'); date.setMonth(date.getMonth() + offset); month = iso(date).slice(0, 7);
+        S.ui.nutrientMonth = month; loadMonth(); paint();
+        root.querySelector(`[data-calendar-date="${selectedDate}"]`)?.focus({preventScroll: true});
+      };
+      $('#nut-month-prev', root).onclick = () => move(-1); $('#nut-month-next', root).onclick = () => move(1);
+      root.querySelectorAll('[data-calendar-date]').forEach(button => button.onclick = () => {
+        selectedDate = button.dataset.calendarDate; paint();
+        root.querySelector(`[data-calendar-date="${selectedDate}"]`)?.focus({preventScroll: true});
+      });
+    };
+    paint();
+    root.querySelector(`[data-calendar-date="${selectedDate}"]`)?.focus({preventScroll: true});
+  }, {full: true, onClose: () => { if (trigger?.isConnected) trigger.focus({preventScroll: true}); }});
+}
 function viewStream() { $('#view').innerHTML = '<section class="stream-blank" aria-label="Лента"></section>'; }
 function viewAnalytics() {
   syncAnalytics();
@@ -1074,6 +1133,8 @@ function viewAnalytics() {
   S.people.forEach(p => people[p.id] = p.name);
   const selected = S.ui.analyticsPerson && people[S.ui.analyticsPerson] ? S.ui.analyticsPerson : 'all';
   const a = RacionAnalytics.aggregate(S.analytics.days, from, now, selected);
+  const history = RacionAnalytics.history(S.analytics.days, now, selected);
+  const since = history.first ? new Date(history.first + 'T12:00:00').toLocaleDateString('ru-RU', {day: 'numeric', month: 'long', year: 'numeric'}) : null;
   const unit = {g: 'г', mg: 'мг', mcg: 'мкг', kcal: 'ккал'}, fmt = n => new Intl.NumberFormat('ru-RU', {maximumFractionDigits: n < 1 && n > 0 ? 3 : 1}).format(n);
   const groups = [['vitamin', 'Витамины'], ['mineral', 'Минералы'], ['amino', 'Аминокислоты'], ['fat', 'Жирные кислоты'], ['macro', 'Белки, жиры и углеводы'], ['carb', 'Углеводы и клетчатка'], ['energy', 'Энергия'], ['other', 'Другие показатели']];
   const card = n => {
@@ -1085,7 +1146,7 @@ function viewAnalytics() {
     const title = above && r.state === 'normal' ? 'В среднем — норма' : r.label;
     const shortfall = r.state === 'low' ? `До нижней границы ${fmt(r.min - v)} ${u}.` : r.state === 'high' ? `Выше верхней границы на ${fmt(v - r.max)} ${u}.` : '';
     const names = above ? Object.values(alert.people).join(', ') : '';
-    return `<article class="nutrient state-${r.state}" data-nutrient="${n.id}"><div class="nutrient-head"><h4>${esc(n.name)}</h4><span class="range-state">${title}</span></div>
+    return `<article class="nutrient state-${r.state}" data-nutrient="${n.id}" role="button" tabindex="0" aria-haspopup="dialog" aria-label="${esc(n.name)}: открыть календарь"><div class="nutrient-head"><h4>${esc(n.name)}</h4><span class="range-state">${title}</span></div>
       <div class="nutrient-amount">${unknown ? 'Не менее ' : ''}<b>${fmt(v)} ${esc(u)}</b><span> за выбранный период</span></div>
       <div class="nutrient-band" role="img" aria-label="${esc(n.name + ': ' + title + '. ' + minimum + '. ' + maximum)}">
         <span class="range-zone range-low${r.min == null ? ' unavailable' : ''}"></span><span class="range-zone range-normal${r.min == null && r.max == null ? ' unavailable' : ''}"></span><span class="range-zone range-high${r.max == null ? ' unavailable' : ''}"></span>
@@ -1101,9 +1162,15 @@ function viewAnalytics() {
     <div class="analytics-controls"><label>Период<select id="a-period"><option value="week"${period === 'week' ? ' selected' : ''}>Последние 7 дней</option><option value="month"${period === 'month' ? ' selected' : ''}>Последние 30 дней</option><option value="all"${period === 'all' ? ' selected' : ''}>За всё время</option></select></label>
     <label>Кто ест<select id="a-person"><option value="all">Вся семья</option>${Object.entries(people).map(([id, name]) => `<option value="${esc(id)}"${selected === id ? ' selected' : ''}>${esc(name)}</option>`).join('')}</select></label></div>
     <section class="analytics-summary"><b>${a.days}</b><div>дней с сохранённым рационом<p>${period === 'all' ? 'За всё время использования' : period === 'week' ? 'За последние 7 дней' : 'За последние 30 дней'}</p></div></section>
+    <div class="analytics-history"><strong>${since ? 'История с ' + since : 'История ещё не началась'}</strong><span>${history.days} ${ruDays(history.days)} с записями за всё время${selected === 'all' ? ' · семья' : ' · ' + esc(people[selected])}</span><small>Дни без записей не считаются заполненными. История хранится на этом устройстве.</small></div>
     <p class="hint analytics-note">По сохранённому рациону до сегодняшнего дня, включая неотмеченные приёмы. Пропущенные блюда исключены. Это состав меню, а не подтверждение съеденного. Границы суммируются за дни с данными, с учётом норм каждого человека. 100% потребности не означает верхний предел.</p>
-    ${!a.days ? `<div class="empty"><h3>${selected === 'all' ? 'Здесь появится ваша аналитика' : esc(people[selected]) + ': пока нет данных'}</h3><p>За выбранный период нет сохранённого рациона. Нули не считаются недостатком.</p></div>` : groups.map(([g, title]) => `<section class="nutrient-group"><h3>${title}</h3>${RacionAnalytics.data.nutrients.filter(n => n.group === g).map(card).join('')}</section>`).join('')}
+    ${history.days < 30 ? `<aside class="analytics-caution" role="note"><strong>Пока недостаточно истории</strong><p>Сохранено ${history.days} ${ruDays(history.days)} с данными из 30. Это предварительная сводка отдельных приёмов пищи и дней. По ней пока нельзя судить об обычном питании: нужно накопить хотя бы 30 дней записей.</p></aside>` : ''}
+    ${!a.days ? `<div class="empty"><h3>${selected === 'all' ? 'Здесь появится ваша аналитика' : esc(people[selected]) + ': пока нет данных'}</h3><p>За выбранный период нет сохранённого рациона. Нули не считаются недостатком.</p></div>` : groups.map(([g, title]) => `<section class="nutrient-group"><h3>${title}</h3>${RacionAnalytics.ordered(RacionAnalytics.data.nutrients.filter(n => n.group === g), a.ranges).map(card).join('')}</section>`).join('')}
     <p class="hint analytics-note">Верхние границы — из отчётов проекта, система NASEM; рабочие коридоры отмечены отдельно. Пределы только для добавок не применяются к обычной пище. Отсутствие верхней границы не означает, что любое количество полезно. Старая история сохраняет прежние ориентиры; возрастные пределы без исторических данных не выдумываются. Аналитика не ставит диагноз.</p>`;
+  $('#view').querySelectorAll('[data-nutrient]').forEach(el => {
+    const open = () => nutrientCalendar(el.dataset.nutrient, selected);
+    el.onclick = open; el.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } };
+  });
   $('#a-period').onchange = e => { S.ui.analyticsPeriod = e.target.value; save(); render(); };
   $('#a-person').onchange = e => { S.ui.analyticsPerson = e.target.value; save(); render(); };
 }
@@ -1128,8 +1195,11 @@ function viewCollect() {
     <button class="btn ghost wide" id="c-go"${med || busy ? ' disabled' : ''}>${ic('collect')}<span>${started ? 'Продолжить сбор' : 'Собрать рацион'}</span></button></div>
     ${busy ? `<div class="auto-progress" role="status" aria-live="polite">${esc(S.ui.autoProgress || 'Подбираем блюда…')}<button class="linkbtn" id="c-auto-stop">Остановить</button></div>` : ''}
     ${S.ui.autoResult ? `<p class="hint auto-result" role="status">${esc(S.ui.autoResult)}</p>` : ''}
-    <div class="panel gap wish-panel"><h3>Желаемое блюдо</h3><div class="wish-compose"><div class="wish-fields"><label class="wish-name-label">Название<input id="c-wish" placeholder="Борщ, плов…" value="${esc(S.ui.wishName || '')}" enterkeyhint="done" aria-label="Название блюда"></label><label>Приём пищи<select id="c-wish-slot">${mealOptions}</select></label></div>
-    <div class="wish-buttons"><button class="addbtn wish-favorite" id="c-wish-fav" aria-label="Избранные блюда">${ic('heart')}</button><button class="addbtn" id="c-wish-add" aria-label="Добавить блюдо на выбранные даты">${ic('plus')}</button></div></div>
+    <div class="panel gap wish-panel"><h3>Желаемое блюдо</h3><div class="wish-compose">
+    <label class="wish-name-label">Название<input id="c-wish" placeholder="Борщ, плов…" value="${esc(S.ui.wishName || '')}" enterkeyhint="done" aria-label="Название блюда"></label>
+    <button class="addbtn wish-favorite" id="c-wish-fav" aria-label="Избранные блюда">${ic('heart')}</button>
+    <label class="wish-meal-label">Приём пищи<select id="c-wish-slot">${mealOptions}</select></label>
+    <button class="addbtn" id="c-wish-add" aria-label="Добавить блюдо на выбранные даты">${ic('plus')}</button></div>
     <div class="wish-calendar-head"><span>Даты · можно несколько</span><button class="linkbtn" id="wish-clear">Ближайший день</button></div><div class="wish-calendar" aria-label="Даты желаемого блюда">${dates}</div>
     <p class="hint wish-help">${selectedDates.length ? 'Выбрано дат: ' + selectedDates.length + '. Блюдо встанет в свободный приём каждой даты.' : 'Без выбранных дат — ближайший свободный приём.'}</p>
     ${wishes.length ? `<div class="chips">${[...new Set(wishes.map(x => x.dish.name))].map(n => `<span class="chip">${esc(n)}</span>`).join('')}</div>` : ''}</div>
@@ -1572,7 +1642,7 @@ function viewSettings() {
     v.innerHTML = `${appbar('Настройки', 'Профиль и приложение', {back: true})}
     <button class="profile" data-person="${me.id}"><span class="mono">${esc(me.name.slice(0, 1).toUpperCase())}</span><span><b>${esc(me.name)}</b><small>${r0(t.E)} ккал · белок ${r0(t.P)} г в день</small></span>${ic('chev', 'sm')}</button>
     <nav class="rows">${SET_PAGES.map(([k, t, s]) => `<button class="row" data-set="${k}"><span class="medal">${ic(SET_IC[k])}</span><span><b>${t}</b><small>${s}</small></span>${ic('chev', 'sm')}</button>`).join('')}</nav>
-    <p class="hint center">Мой рацион · версия 0.10.1</p>`;
+    <p class="hint center">Мой рацион · версия 0.10.2</p>`;
     v.querySelectorAll('[data-set]').forEach(b => b.onclick = () => { S.ui.set = b.dataset.set; save(); render(); });
     v.querySelector('[data-person]').onclick = () => editPerson(me);
     return;

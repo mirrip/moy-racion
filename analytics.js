@@ -176,5 +176,48 @@ const RacionAnalytics = (() => {
     for (const r of Object.values(ranges)) { if (!r.minKnown) r.min = null; if (!r.maxKnown) r.max = null; }
     return {values, targets, missing, referenceDays, people, ranges, excursions, days: dates.size, first: rows[0]?.[0] || null};
   }
-  return {data, dish, targets, limits, legacyLimits, assess, makeDay, aggregate};
+  function hasNorm(range) {
+    return (finite(range?.min) && range.min > 0) || (finite(range?.max) && range.max > 0);
+  }
+  function ordered(nutrients, ranges) {
+    return nutrients.map((n, i) => ({n, i})).sort((a, b) =>
+      Number(!hasNorm(ranges[a.n.id])) - Number(!hasNorm(ranges[b.n.id])) || a.i - b.i).map(x => x.n);
+  }
+  function history(days, until, pid = 'all') {
+    const dates = Object.entries(days).filter(([date, day]) => date <= until &&
+      (pid === 'all' ? Object.keys(day.people || {}).length : !!day.people?.[pid])).map(([date]) => date).sort();
+    return {days: dates.length, first: dates[0] || null, last: dates[dates.length - 1] || null};
+  }
+  function daily(days, date, pid, nutrient) {
+    const total = aggregate(days, date, date, pid);
+    if (!total.days) return {date, state: 'empty', label: 'Нет данных', cases: [], value: null, range: {}};
+    const entries = Object.entries(days[date]?.people || {}).filter(([id]) => pid === 'all' || pid === id);
+    const cases = entries.map(([id, p]) => {
+      const own = entries.length === 1 ? total : aggregate(days, date, date, id);
+      const r = assess(own.values[nutrient] || 0, own.ranges[nutrient], own.missing[nutrient]);
+      return {id, name: p.name, value: own.values[nutrient] || 0, range: own.ranges[nutrient] || {},
+        state: r.state, label: r.label, filled: p.filled, meals: days[date].meals};
+    });
+    const rating = assess(total.values[nutrient] || 0, total.ranges[nutrient], total.missing[nutrient]);
+    // A family day cannot be green just because another person's intake compensates for an excess/shortfall.
+    let state = rating.state;
+    if (cases.some(x => x.state === 'high')) state = 'high';
+    else if (cases.some(x => x.state === 'unknown')) state = 'unknown';
+    else if (cases.some(x => x.state === 'low')) state = 'low';
+    else if (cases.some(x => x.state === 'unrated')) state = 'unrated';
+    const label = {high: 'Избыток', low: 'Недостаток', normal: 'Норма', unknown: 'Неполные данные', unrated: 'Без отдельной нормы'}[state];
+    return {date, state, label, cases, value: total.values[nutrient] || 0,
+      range: total.ranges[nutrient] || {}, missing: !!total.missing[nutrient]};
+  }
+  function calendar(days, month, until, pid, nutrient) {
+    const [year, m] = month.split('-').map(Number);
+    const count = new Date(Date.UTC(year, m, 0)).getUTCDate();
+    const offset = (new Date(Date.UTC(year, m - 1, 1)).getUTCDay() + 6) % 7;
+    const dates = Array.from({length: count}, (_, i) => {
+      const date = month + '-' + String(i + 1).padStart(2, '0');
+      return date > until ? {date, future: true, state: 'empty', label: 'Будущий день', cases: []} : daily(days, date, pid, nutrient);
+    });
+    return {offset, dates};
+  }
+  return {data, dish, targets, limits, legacyLimits, assess, makeDay, aggregate, hasNorm, ordered, history, daily, calendar};
 })();
