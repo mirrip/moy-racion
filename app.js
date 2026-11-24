@@ -806,6 +806,27 @@ function appbar(title, sub, opts = {}) {
   return `<header class="appbar">${opts.back ? `<button class="iconbtn" data-back aria-label="Назад">${ic('back')}</button>` : ''}<div class="ab-t"><p class="eyebrow">${sub || 'Мой рацион'}</p><h1 class="gt">${title}</h1></div>${opts.back ? '' : `<button class="iconbtn" data-gear aria-label="Настройки">${ic('gear')}</button>`}</header>`;
 }
 const kbju = n => `<span class="k"><b>${r0(n.kcal)}</b> ккал</span><span>Б ${r0(n.p)}</span><span>Ж ${r0(n.f)}</span><span>У ${r0(n.c)}</span>`;
+function bindSurfaceLight() {
+  const header = $('#view .appbar');
+  if (!header || S.theme !== 'garden') return;
+  let frame = 0, point;
+  const reset = () => {
+    cancelAnimationFrame(frame); frame = 0;
+    ['--light-x','--light-y','--orb-x','--orb-y'].forEach(k => header.style.removeProperty(k));
+  };
+  header.onpointermove = e => {
+    if (e.pointerType !== 'mouse' || window.matchMedia('(prefers-reduced-motion: reduce)').matches) { reset(); return; }
+    point = {x: e.clientX, y: e.clientY};
+    if (frame) return;
+    frame = requestAnimationFrame(() => {
+      frame = 0; if (!header.isConnected) return;
+      const r = header.getBoundingClientRect(), x = Math.max(0, Math.min(1, (point.x - r.left) / r.width)), y = Math.max(0, Math.min(1, (point.y - r.top) / r.height));
+      header.style.setProperty('--light-x', Math.round(x * 100) + '%'); header.style.setProperty('--light-y', Math.round(y * 100) + '%');
+      header.style.setProperty('--orb-x', ((x - .5) * 12).toFixed(1) + 'px'); header.style.setProperty('--orb-y', ((y - .5) * 8).toFixed(1) + 'px');
+    });
+  };
+  header.onpointerleave = reset;
+}
 
 let lastView = '';
 function render() {
@@ -824,6 +845,7 @@ function render() {
   if (S.ui.tab === 'settings') $('#nav').hidden = true;
   document.body.classList.toggle('empty-stream', S.ui.tab === 'stream');
   ({plan: viewPlan, stream: viewStream, analytics: viewAnalytics, collect: viewCollect, shop: viewShop, settings: viewSettings}[S.ui.tab] || viewPlan)();
+  bindSurfaceLight();
 }
 
 /* ---------- Онбординг / форма человека ---------- */
@@ -1485,6 +1507,7 @@ function viewFeed() {
 }
 function closeFeed() {
   const F = S.feed, w = $('#feedwrap'); if (!F || !F.active) return;
+  bindFeed.observer?.disconnect();
   // Commit the closed state before animating, so a quick reload cannot reopen it.
   F.active = false; S.ui.tab = 'plan'; save();
   const fin = () => { if (S.feed === F && !F.active) render(); };
@@ -1508,7 +1531,13 @@ function bindFeed() {
   const pk = $('#f-pick'); if (pk) pk.onclick = pickSeen;
   const card = $('#card'); if (!card || !live) return;
   const box = $('#ingbox'), more = $('#ingmore');
-  if (box.scrollHeight > box.clientHeight + 2) { box.classList.add('ovf'); more.hidden = false; }
+  const fitIngredients = () => {
+    const compact = S.theme === 'garden' && window.matchMedia('(max-height:600px) and (min-width:600px)').matches;
+    const overflow = compact || box.scrollHeight > box.clientHeight + 2;
+    box.classList.toggle('ovf', overflow); more.hidden = !overflow;
+  };
+  bindFeed.observer?.disconnect(); fitIngredients();
+  bindFeed.observer = new ResizeObserver(fitIngredients); bindFeed.observer.observe(box);
   more.onclick = ingFull; more.addEventListener('pointerdown', e => e.stopPropagation());
   let g = null; // жест: старт, ось, смещение
   const set = (k, v) => card.style.setProperty('--' + k, v);
@@ -1702,7 +1731,7 @@ function viewSettings() {
     v.innerHTML = `${appbar('Настройки', 'Профиль и приложение', {back: true})}
     <button class="profile" data-person="${me.id}"><span class="mono">${esc(me.name.slice(0, 1).toUpperCase())}</span><span><b>${esc(me.name)}</b><small>${r0(t.E)} ккал · белок ${r0(t.P)} г в день</small></span>${ic('chev', 'sm')}</button>
     <nav class="rows">${SET_PAGES.map(([k, t, s]) => `<button class="row" data-set="${k}"><span class="medal">${ic(SET_IC[k])}</span><span><b>${t}</b><small>${s}</small></span>${ic('chev', 'sm')}</button>`).join('')}</nav>
-    <p class="hint center">Мой рацион · версия 0.12.0</p>`;
+    <p class="hint center">Мой рацион · версия 0.13.0</p>`;
     v.querySelectorAll('[data-set]').forEach(b => b.onclick = () => { S.ui.set = b.dataset.set; save(); render(); });
     v.querySelector('[data-person]').onclick = () => editPerson(me);
     return;
@@ -1710,8 +1739,8 @@ function viewSettings() {
   const title = SET_PAGES.find(x => x[0] === pg)[1];
   const meds = [['kidney','Болезни почек'],['diabetes','Диабет на инсулине или сульфонилмочевине'],['ed','Расстройство пищевого поведения'],['preg','Беременность или кормление'],['warfarin','Приём варфарина'],['gi','Целиакия, подагра, тяжёлые болезни печени или ЖКТ']];
   let body = '';
-  if (pg === 'look') body = `<h4>Тема</h4><div class="themes">${[['garden','Сад','Молочный, лесной зелёный, солнечные акценты'],['light','Светлая','Крем, олива, коралл'],['dark','Тёмная','Графит и золото'],['system','Как в системе','Меняется сама']].map(([k, t, s]) => `<button class="theme-card t-${k}${S.theme === k ? ' on' : ''}" data-theme-set="${k}"><i></i><b>${t}</b><small>${s}</small></button>`).join('')}</div>
-    ${S.theme === 'garden' ? '<p class="hint">Молочная основа, лесной зелёный и тёплые акценты. Чёткая типографика, спокойные поверхности и единое оформление всех разделов.</p>' : `<h4>Акцент</h4><div class="accents">${[['gold','Классическое золото'],['champagne','Шампань'],['rose','Розовое золото']].map(([k, t]) => `<button class="accent a-${k}${(S.accent || 'gold') === k ? ' on' : ''}" data-accent="${k}"><i></i><span>${t}</span></button>`).join('')}</div>`}`;
+  if (pg === 'look') body = `<h4>Тема</h4><div class="themes">${[['garden','Изумруд','Сукно, фарфор и мягкое сияние'],['light','Светлая','Крем, олива, коралл'],['dark','Тёмная','Графит и золото'],['system','Как в системе','Меняется сама']].map(([k, t, s]) => `<button class="theme-card t-${k}${S.theme === k ? ' on' : ''}" data-theme-set="${k}"><i></i><b>${t}</b><small>${s}</small></button>`).join('')}</div>
+    ${S.theme === 'garden' ? '<p class="hint">Глубокая зелень, молочные поверхности и тёплые световые кромки. Многослойные материалы, объёмные кнопки и мягкие движения.</p>' : `<h4>Акцент</h4><div class="accents">${[['gold','Классическое золото'],['champagne','Шампань'],['rose','Розовое золото']].map(([k, t]) => `<button class="accent a-${k}${(S.accent || 'gold') === k ? ' on' : ''}" data-accent="${k}"><i></i><span>${t}</span></button>`).join('')}</div>`}`;
   if (pg === 'family') body = `<ul class="people">${S.people.map(p => { const t = personTargets(p); return `<li><button data-person="${p.id}"><span class="mono">${esc(p.name.slice(0, 1).toUpperCase())}</span><span><b>${esc(p.name)}</b><small>${p.sex === 'm' ? 'М' : 'Ж'}, ${p.age} лет, ${p.weight} кг · ${r0(t.E)} ккал, белок ${r0(t.P)} г</small></span>${ic('chev', 'sm')}</button></li>`; }).join('')}</ul>
     ${S.people.length < 10 ? '<button class="btn ghost wide" id="st-add">Добавить человека</button>' : '<p class="hint">Максимум 10 человек.</p>'}
     <p class="hint">Блюда общие для всей семьи, порции считаются по нормам каждого.</p>`;
