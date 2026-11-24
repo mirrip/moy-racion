@@ -742,6 +742,7 @@ function toast(t) { const el = $('#toast'); el.textContent = t; el.hidden = fals
 function sheet(html, onMount, opts = {}) {
   closeSheet.after = opts.onClose || null;
   const el = $('#sheet'), card = $('.sheet-card');
+  const opening = el.hidden;
   if (el.hidden) sheet.returnFocus = document.activeElement;
   el.classList.toggle('full', !!opts.full); el.classList.remove('pulling'); card.style.transform = '';
   $('#sheet-body').innerHTML = html; el.hidden = false; $('#sheet-body').scrollTop = 0; document.body.classList.add('sheeted'); onMount && onMount($('#sheet-body'));
@@ -751,10 +752,30 @@ function sheet(html, onMount, opts = {}) {
   if (title) { title.id = title.id || 'sheet-heading'; card.setAttribute('aria-labelledby', title.id); }
   else card.setAttribute('aria-label', 'Мой рацион');
   if (!card.contains(document.activeElement)) card.focus({preventScroll: true});
+  if (opening) {
+    animateSurface(card);
+    if (el.animate && !window.matchMedia('(prefers-reduced-motion: reduce)').matches)
+      el.animate([{opacity:0},{opacity:1}], {duration:260,easing:'ease-out'});
+  }
 }
 const closeSheet = () => {
   if ($('#sheet').hidden) return;
   const after = closeSheet.after, opener = sheet.returnFocus;
+  if (typeof window !== 'undefined' && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    const card = $('.sheet-card'), rect = card.getBoundingClientRect(), ghost = card.cloneNode(true), style = getComputedStyle(card);
+    const sourceBody = $('#sheet-body'), ghostBody = ghost.querySelector('#sheet-body'), bodyStyle = getComputedStyle(sourceBody);
+    ghostBody.classList.add('sheet-exit-body'); ghostBody.scrollTop = sourceBody.scrollTop;
+    for (const key of ['display','gap','alignContent','padding','overflowY','minHeight']) ghostBody.style[key] = bodyStyle[key];
+    ghost.querySelectorAll('[id]').forEach(el => el.removeAttribute('id')); ghost.removeAttribute('id'); ghost.removeAttribute('role'); ghost.removeAttribute('aria-modal'); ghost.inert = true; ghost.setAttribute('aria-hidden','true'); ghost.classList.add('sheet-exit');
+    const backdrop = document.createElement('div'), surface = getComputedStyle($('#sheet'));
+    backdrop.inert = true; backdrop.setAttribute('aria-hidden','true');
+    Object.assign(backdrop.style,{position:'fixed',inset:'0',zIndex:'28',pointerEvents:'none',background:surface.backgroundColor,backdropFilter:surface.backdropFilter});
+    document.body.append(backdrop);
+    backdrop.animate([{opacity:1},{opacity:0}],{duration:180,easing:'ease-out'}).finished.catch(() => {}).finally(() => backdrop.remove());
+    Object.assign(ghost.style,{position:'fixed',left:rect.left+'px',top:rect.top+'px',width:rect.width+'px',height:rect.height+'px',maxHeight:'none',maxWidth:'none',padding:style.padding,borderRadius:style.borderRadius,margin:'0',zIndex:'29',pointerEvents:'none'});
+    document.body.append(ghost); ghostBody.scrollTop = sourceBody.scrollTop;
+    const animation = animateSurface(ghost, true); if (animation) animation.finished.catch(() => {}).finally(() => ghost.remove()); else ghost.remove();
+  }
   closeSheet.after = null; sheet.returnFocus = null; $('#sheet').hidden = true; document.body.classList.remove('sheeted');
   $('#scroller').inert = false; $('#nav').inert = false;
   if (opener?.isConnected) opener.focus({preventScroll: true});
@@ -828,10 +849,14 @@ function bindSurfaceLight() {
   header.onpointerleave = reset;
 }
 
+function animateSurface(element, closing = false) {
+  if (!element?.animate || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  return element.animate(closing ? [{opacity:1,transform:'translateY(0)'},{opacity:0,transform:'translateY(12px)'}] : [{opacity:0,transform:'translateY(12px)'},{opacity:1,transform:'translateY(0)'}], {duration:closing ? 180 : 380,easing:'cubic-bezier(.22,.75,.24,1)'});
+}
 let lastView = '';
 function render() {
   applyTheme(); rollWeek();
-  const vk = (S.feed && S.feed.active) ? 'feed' : S.ui.tab + (S.ui.set || ''); if (vk !== lastView) { const sc = $('#scroller'); if (sc) sc.scrollTop = 0; window.scrollTo(0, 0); lastView = vk; }
+  const vk = (S.feed && S.feed.active) ? 'feed' : S.ui.tab + (S.ui.set || ''); const changed = vk !== lastView; if (changed) { const sc = $('#scroller'); if (sc) sc.scrollTop = 0; window.scrollTo(0, 0); lastView = vk; }
   document.querySelectorAll('.tab').forEach(b => { b.setAttribute('aria-current', b.dataset.tab === S.ui.tab ? 'page' : 'false'); b.disabled = !!autoRun; });
   const v = $('#view');
   v.dataset.page = S.feed?.active ? 'feed' : !S.onboarded ? 'onboarding' : S.ui.tab;
@@ -839,13 +864,14 @@ function render() {
   $('#nav').hidden = false;
   const feeding = !!(S.feed && S.feed.active); document.body.classList.toggle('feeding', feeding);
   if (feeding) { const old = $('#feedwrap');
-    if (old) { const t = document.createElement('div'); t.innerHTML = viewFeed(); const nw = t.firstElementChild; ['.ftop', '.slots', '.deck', '.fbtns'].forEach(q => { const a = old.querySelector(q), b = nw.querySelector(q); if (a && b) a.replaceWith(b); }); }
+    if (old) { const t = document.createElement('div'); t.innerHTML = viewFeed(); const nw = t.firstElementChild; ['.ftop', '.deck'].forEach(q => { const a = old.querySelector(q), b = nw.querySelector(q); if (a && b) a.replaceWith(b); }); }
     else v.innerHTML = viewFeed();
     bindFeed(); $('#nav').hidden = true; return; }
   if (S.ui.tab === 'settings') $('#nav').hidden = true;
   document.body.classList.toggle('empty-stream', S.ui.tab === 'stream');
   ({plan: viewPlan, stream: viewStream, analytics: viewAnalytics, collect: viewCollect, shop: viewShop, settings: viewSettings}[S.ui.tab] || viewPlan)();
   bindSurfaceLight();
+  if (changed) animateSurface(v);
 }
 
 /* ---------- Онбординг / форма человека ---------- */
@@ -1077,7 +1103,7 @@ function mealPage(day, i) { // блюдо — отдельное полноэк�
    <h2 class="pg-title">${esc(d.name)}</h2>
    ${dishPhoto(d) ? `<img class="recipe-photo" src="${esc(dishPhoto(d))}" width="640" height="400" alt="" onerror="this.hidden=true">` : ''}
    <div class="grid4"><div><b>${r0(n.kcal)}</b><span>ккал</span></div><div><b>${r0(n.p)}</b><span>белки, г</span></div><div><b>${r0(n.f)}</b><span>жиры, г</span></div><div><b>${r0(n.c)}</b><span>углеводы, г</span></div></div>
-   <div class="facts"><div><em>Готовка</em><b>${d.time} мин</b></div><div><em>Сложность</em><b>${d.diff} из 10</b></div><div><em>Клетчатка</em><b>${r1(n.fib)} г</b></div><div><em>Стоимость</em><b>≈ ${r0(famCost(d) / 10) * 10} ₽</b></div></div>
+   <div class="facts"><div><em>Готовка</em><b>${d.time} мин</b></div><div><em>Стоимость</em><b>≈ ${r0(famCost(d) / 10) * 10} ₽</b></div></div>
    ${S.marks.notes[d.id] ? `<p class="note">${ic('heart', 'sm')} ${esc(S.marks.notes[d.id])}</p>` : ''}
    <h4>Ингредиенты на всех · ${r0(n.g)} г</h4><ul class="ing">${d.ing.map(x => `<li><span>${esc(x.name)}</span><b>${fmtAmt(x, x.g * ff)}</b></li>`).join('')}${d.salt || d.saltOrig ? '<li><span>Соль</span><b>по вкусу</b></li>' : ''}</ul>
    ${stepsOf(d).length ? `<h4>Как готовить</h4><ol class="steps">${stepsOf(d).map(t => `<li>${esc(t)}</li>`).join('')}</ol>` : ''}
@@ -1109,32 +1135,46 @@ function dayPassport(day) { // только калории, БЖУ и клетч
 }
 
 /* ---------- Аналитика: ежедневные снимки сохраняются дольше истории рецептов ---------- */
+function analyticsSnapshot(plan, day, i, current) {
+  const pat = PATTERNS[plan.meals];
+  return RacionAnalytics.makeDay(day, addDays(plan.start, i), S.people, {
+    targets: p => RacionAnalytics.targets(p, personTargets(p), microNorm(p, S.settings.norms), S.settings.norms),
+    limits: p => RacionAnalytics.limits(p, personTargets(p), microNorm(p, S.settings.norms), S.settings.norms),
+    factors: (dish, slot) => S.people.map(p => Math.min(2.5, Math.max(.5, personTargets(p).E * pat[slot][2] / 100 / (nut(dish).kcal || 1)))),
+    addons: current ? planAddons()[i] || [] : []
+  }, plan.meals);
+}
 function syncAnalytics() {
   if (!S.people.length || typeof RacionAnalytics === 'undefined') return;
   const today = iso(new Date()), ledger = S.analytics.days;
   const capture = (plan, current) => {
-    if (!plan?.days) return;
-    const pat = PATTERNS[plan.meals]; if (!pat) return;
-    const addons = current ? planAddons() : [];
+    if (!plan?.days || !PATTERNS[plan.meals]) return;
     plan.days.forEach((day, i) => {
       const date = addDays(plan.start, i);
       if (date > today || (date < today && ledger[date])) return;
-      if (!day.slots.some(Boolean)) { if (date === today && current) delete ledger[date]; return; }
-      ledger[date] = RacionAnalytics.makeDay(day, date, S.people, {
-        targets: p => RacionAnalytics.targets(p, personTargets(p), microNorm(p, S.settings.norms), S.settings.norms),
-        limits: p => RacionAnalytics.limits(p, personTargets(p), microNorm(p, S.settings.norms), S.settings.norms),
-        factors: (dish, slot) => S.people.map(p => Math.min(2.5, Math.max(.5, personTargets(p).E * pat[slot][2] / 100 / (nut(dish).kcal || 1)))),
-        addons: addons[i] || []
-      }, plan.meals);
+      if (!day.slots.some(sl => sl && !sl.unsafe && sl.status !== 'skipped')) { if (date === today && current) delete ledger[date]; return; }
+      ledger[date] = analyticsSnapshot(plan, day, i, current);
     });
   };
   capture(S.lastWeek, false); capture(S.plan, true);
 }
+function analyticsMenuDays() {
+  const today = iso(new Date());
+  const days = Object.fromEntries(Object.entries(S.analytics.days).filter(([date, day]) => date <= today && Object.values(day.people || {}).some(p => p.filled !== 0)));
+  if (S.plan?.days && PATTERNS[S.plan.meals]) S.plan.days.forEach((day, i) => {
+    const date = addDays(S.plan.start, i);
+    if (date < today && days[date]) return;
+    if (day.slots.some(sl => sl && !sl.unsafe && sl.status !== 'skipped')) days[date] = analyticsSnapshot(S.plan, day, i, true);
+    else delete days[date];
+  });
+  return days;
+}
 function nutrientCalendar(id, pid = 'all') {
   const trigger = document.activeElement;
   const n = RacionAnalytics.data.nutrients.find(n => n.id === id); if (!n) return;
-  const today = iso(new Date()), currentMonth = today.slice(0, 7);
-  const history = RacionAnalytics.history(S.analytics.days, today, pid);
+  const today = iso(new Date()), menu = analyticsMenuDays(), until = Object.keys(menu).sort().slice(-1)[0] || today;
+  const currentMonth = (until > today ? until : today).slice(0, 7);
+  const history = RacionAnalytics.history(menu, until, pid);
   const firstMonth = history.first?.slice(0, 7) || currentMonth;
   let month = S.ui.nutrientMonth || currentMonth;
   if (!/^\d{4}-\d{2}$/.test(month) || month < firstMonth || month > currentMonth) month = currentMonth;
@@ -1145,7 +1185,7 @@ function nutrientCalendar(id, pid = 'all') {
   const symbol = state => ({normal: '✓', low: '−', high: '+', unknown: '?', unrated: '·', empty: ''})[state];
   const who = pid === 'all' ? 'Вся семья' : S.people.find(p => p.id === pid)?.name || Object.values(S.analytics.days).find(d => d.people?.[pid])?.people[pid].name || 'Участник семьи';
   const loadMonth = () => {
-    calendar = RacionAnalytics.calendar(S.analytics.days, month, today, pid, id);
+    calendar = RacionAnalytics.calendar(menu, month, until > today ? until : today, pid, id);
     selectedDate = calendar.dates.filter(d => d.state !== 'empty').slice(-1)[0]?.date || (month === currentMonth ? today : month + '-01');
   };
   loadMonth();
@@ -1171,7 +1211,7 @@ function nutrientCalendar(id, pid = 'all') {
         <div class="calendar-weekdays" aria-hidden="true">${['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].map(d => `<span>${d}</span>`).join('')}</div>
         <div class="nutrient-calendar-grid" aria-label="Дни месяца">${cells}</div>
         <div class="calendar-legend"><span><i class="day-normal"></i>Норма</span><span><i class="day-low"></i>Недостаток</span><span><i class="day-high"></i>Избыток</span><span><i class="day-empty"></i>Нет данных / оценки</span></div>
-        <section class="calendar-detail" aria-live="polite"><h3>${dateLabel(selectedDate)}</h3>${detail}</section>
+        <section class="calendar-detail" aria-live="polite"><h3>${dateLabel(selectedDate)}</h3>${selectedDate > today ? '<p class="hint">Запланированный рацион · будущий день</p>' : ''}${detail}</section>
         <p class="hint calendar-footnote">Это состав сохранённого меню, а не подтверждение съеденного. Серые дни — нет записей, полной информации или отдельной нормы. История хранится на этом устройстве.</p>`;
       const move = offset => {
         const date = new Date(month + '-01T12:00:00'); date.setMonth(date.getMonth() + offset); month = iso(date).slice(0, 7);
@@ -1192,12 +1232,16 @@ function viewStream() { $('#view').innerHTML = '<section class="stream-blank" ar
 function viewAnalytics() {
   syncAnalytics();
   const now = iso(new Date()), period = ['week', 'month', 'all'].includes(S.ui.analyticsPeriod) ? S.ui.analyticsPeriod : 'week';
-  const from = period === 'all' ? '0000-01-01' : addDays(now, period === 'week' ? -6 : -29);
-  const people = {}; Object.values(S.analytics.days).forEach(d => Object.entries(d.people || {}).forEach(([id, p]) => people[id] = p.name));
+  const menu = analyticsMenuDays();
+  const people = {}; Object.values(menu).forEach(d => Object.entries(d.people || {}).forEach(([id, p]) => people[id] = p.name));
   S.people.forEach(p => people[p.id] = p.name);
   const selected = S.ui.analyticsPerson && people[S.ui.analyticsPerson] ? S.ui.analyticsPerson : 'all';
-  const a = RacionAnalytics.aggregate(S.analytics.days, from, now, selected);
-  const history = RacionAnalytics.history(S.analytics.days, now, selected);
+  const dates = Object.keys(menu).filter(date => selected === 'all' ? Object.values(menu[date].people || {}).some(p => p.filled !== 0) : menu[date].people?.[selected] && menu[date].people[selected].filled !== 0).sort();
+  const chosenDates = period === 'all' ? dates : dates.slice(-(period === 'week' ? 7 : 30));
+  const periodDays = Object.fromEntries(chosenDates.map(date => [date, menu[date]]));
+  const a = RacionAnalytics.aggregate(periodDays, '0000-01-01', '9999-12-31', selected);
+  const history = RacionAnalytics.history(menu, '9999-12-31', selected);
+  const partial = chosenDates.filter(date => Object.entries(menu[date].people || {}).some(([id, p]) => (selected === 'all' || id === selected) && Number.isInteger(p.filled) && p.filled < menu[date].meals)).length;
   const since = history.first ? new Date(history.first + 'T12:00:00').toLocaleDateString('ru-RU', {day: 'numeric', month: 'long', year: 'numeric'}) : null;
   const unit = {g: 'г', mg: 'мг', mcg: 'мкг', kcal: 'ккал'}, fmt = n => new Intl.NumberFormat('ru-RU', {maximumFractionDigits: n < 1 && n > 0 ? 3 : 1}).format(n);
   const groups = [['vitamin', 'Витамины'], ['mineral', 'Минералы'], ['amino', 'Аминокислоты'], ['fat', 'Жирные кислоты'], ['macro', 'Белки, жиры и углеводы'], ['carb', 'Углеводы и клетчатка'], ['energy', 'Энергия'], ['other', 'Другие показатели']];
@@ -1223,20 +1267,22 @@ function viewAnalytics() {
       ${r.max == null && n.group === 'amino' && r.min != null ? '<p class="nutrient-status">Верхний предел для этой аминокислоты в отчёте не установлен.</p>' : ''}</article>`;
   };
   $('#view').innerHTML = `${appbar('Аналитика', 'Питание в цифрах')}
-    <div class="analytics-controls"><label>Период<select id="a-period"><option value="week"${period === 'week' ? ' selected' : ''}>Последние 7 дней</option><option value="month"${period === 'month' ? ' selected' : ''}>Последние 30 дней</option><option value="all"${period === 'all' ? ' selected' : ''}>За всё время</option></select></label>
-    <label>Кто ест<select id="a-person"><option value="all">Вся семья</option>${Object.entries(people).map(([id, name]) => `<option value="${esc(id)}"${selected === id ? ' selected' : ''}>${esc(name)}</option>`).join('')}</select></label></div>
-    <section class="analytics-summary"><b>${a.days}</b><div>дней с сохранённым рационом<p>${period === 'all' ? 'За всё время использования' : period === 'week' ? 'За последние 7 дней' : 'За последние 30 дней'}</p></div></section>
-    <div class="analytics-history"><strong>${since ? 'История с ' + since : 'История ещё не началась'}</strong><span>${history.days} ${ruDays(history.days)} с записями за всё время${selected === 'all' ? ' · семья' : ' · ' + esc(people[selected])}</span><small>Дни без записей не считаются заполненными. История хранится на этом устройстве.</small></div>
-    ${history.days < 30 ? `<aside class="analytics-caution" role="note"><strong>Пока недостаточно истории</strong><p>Сохранено ${history.days} ${ruDays(history.days)} с данными из 30. Это предварительная сводка отдельных приёмов пищи и дней. По ней пока нельзя судить об обычном питании: нужно накопить хотя бы 30 дней записей.</p></aside>` : ''}
-    <details class="analytics-method"><summary>Как считаются показатели</summary><p class="hint analytics-note">По сохранённому рациону до сегодняшнего дня, включая неотмеченные приёмы. Пропущенные блюда исключены. Это состав меню, а не подтверждение съеденного. Границы суммируются за дни с данными, с учётом норм каждого человека. 100% потребности не означает верхний предел.</p></details>
+    <div class="analytics-controls">
+      <div class="analytics-period"><span class="filter-caption">Дни рациона</span><div class="period-switch" role="group" aria-label="Период аналитики">${[['week','7 дней'],['month','30 дней'],['all','Всё время']].map(([key,label]) => `<button data-period="${key}" aria-pressed="${period === key}">${label}</button>`).join('')}</div></div>
+      <button class="analytics-person" id="a-person-open" aria-haspopup="dialog"><span class="person-medallion" aria-hidden="true">${selected === 'all' ? ic('family') : esc((people[selected] || ' ')[0])}</span><span><small>Для кого</small><b>${selected === 'all' ? 'Вся семья' : esc(people[selected])}</b></span>${ic('down')}</button>
+    </div>
+    <section class="analytics-summary"><b>${a.days}</b><div>${ruDays(a.days)} собранного рациона<p>${period === 'all' ? 'За всё время использования' : period === 'week' ? 'Последние 7 дней рациона' : 'Последние 30 дней рациона'}</p></div></section>
+    <div class="analytics-history"><strong>${since ? 'История с ' + since : 'История ещё не началась'}</strong><span>${history.days} ${ruDays(history.days)} с записями за всё время${selected === 'all' ? ' · семья' : ' · ' + esc(people[selected])}</span><small>${partial ? `Частично заполнены: ${partial}. ` : ''}Учтены и будущие дни меню; пустые дни исключены. История хранится на этом устройстве.</small></div>
+    ${history.days < 30 ? `<aside class="analytics-caution" role="note"><strong>Пока недостаточно истории</strong><p>В сводке: ${history.days} ${ruDays(history.days)} с данными из 30. Это предварительная сводка собранного меню, включая запланированные дни. Менее 30 дней не дают устойчивой картины. Даже после 30 дней состав меню не подтверждает, что всё было съедено.</p></aside>` : ''}
+    <details class="analytics-method"><summary>Как считаются показатели</summary><p class="hint analytics-note">По дням собранного рациона, включая будущие даты и неотмеченные приёмы. Период выбирает последние 7 или 30 заполненных дат меню, а не прошедшие календарные дни. Частично заполненный день учитывается, но его полный дневной ориентир не уменьшается — дополните меню перед оценкой. Пропущенные блюда исключены. Это состав меню, а не подтверждение съеденного. Границы суммируются за дни с данными, с учётом норм каждого человека. 100% потребности не означает верхний предел.</p></details>
     ${!a.days ? `<div class="empty"><h3>${selected === 'all' ? 'Здесь появится ваша аналитика' : esc(people[selected]) + ': пока нет данных'}</h3><p>За выбранный период нет сохранённого рациона. Нули не считаются недостатком.</p></div>` : groups.map(([g, title]) => `<section class="nutrient-group"><h3>${title}</h3>${RacionAnalytics.ordered(RacionAnalytics.data.nutrients.filter(n => n.group === g), a.ranges).map(card).join('')}</section>`).join('')}
     <p class="hint analytics-note">Верхние границы — из отчётов проекта, система NASEM; рабочие коридоры отмечены отдельно. Пределы только для добавок не применяются к обычной пище. Отсутствие верхней границы не означает, что любое количество полезно. Старая история сохраняет прежние ориентиры; возрастные пределы без исторических данных не выдумываются. Аналитика не ставит диагноз.</p>`;
   $('#view').querySelectorAll('[data-nutrient]').forEach(el => {
     const open = () => nutrientCalendar(el.dataset.nutrient, selected);
     el.onclick = open; el.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } };
   });
-  $('#a-period').onchange = e => { S.ui.analyticsPeriod = e.target.value; save(); render(); };
-  $('#a-person').onchange = e => { S.ui.analyticsPerson = e.target.value; save(); render(); };
+  $('#view').querySelectorAll('[data-period]').forEach(button => button.onclick = () => { S.ui.analyticsPeriod = button.dataset.period; save(); render(); $(`[data-period="${S.ui.analyticsPeriod}"]`).focus({preventScroll:true}); });
+  $('#a-person-open').onclick = () => sheet(`<p class="eyebrow">Аналитика семьи</p><h2>Чьи показатели посмотреть?</h2><div class="analytics-people-list">${[['all','Вся семья'],...Object.entries(people)].map(([id,name]) => `<button class="person-choice${id === selected ? ' on' : ''}" data-person="${esc(id)}" aria-pressed="${id === selected}"><span class="person-medallion" aria-hidden="true">${id === 'all' ? ic('family') : esc(name[0])}</span><span><b>${esc(name)}</b><small>${id === 'all' ? 'Каждый участник с учётом своих норм' : 'Личные нормы и состав меню'}</small></span><span aria-hidden="true">${id === selected ? '✓' : '›'}</span></button>`).join('')}</div>`, body => body.querySelectorAll('[data-person]').forEach(button => button.onclick = () => { S.ui.analyticsPerson = button.dataset.person; closeSheet(); save(); render(); $('#a-person-open').focus({preventScroll:true}); }));
 }
 
 /* ---------- Сбор рациона ---------- */
@@ -1249,7 +1295,7 @@ function viewCollect() {
   const selectedDates = S.ui.wishDates || [];
   const mealOptions = [...new Set(pat.map(m => m[0]))].map(t => `<option value="${t}"${S.ui.wishType === t ? ' selected' : ''}>${pat.find(m => m[0] === t)[1]}</option>`).join('');
   const cooking = pat.map((m, slot) => `<div class="meal-difficulty"><span class="meal-difficulty-title">${m[1]}${m[0] === 's' && pat.filter(x => x[0] === 's').length > 1 ? ' ' + (pat.slice(0, slot + 1).filter(x => x[0] === 's').length) : ''}</span><div class="secgrid">${SECTIONS.map(([title], i) => `<button class="secbtn${secs(slot).includes(i) ? ' on' : ''}" data-slot="${slot}" data-sec="${i}" aria-pressed="${secs(slot).includes(i)}" aria-label="${m[1]}: ${title}"><b>${SEC_TIME[i][0]}</b><small>${SEC_TIME[i][1]}</small></button>`).join('')}</div></div>`).join('');
-  const dates = Array.from({length: len}, (_, i) => { const date = addDays(start, i), dt = new Date(date + 'T12:00:00'); return `<button class="wish-day${selectedDates.includes(date) ? ' on' : ''}" data-wish-date="${date}" aria-pressed="${selectedDates.includes(date)}"${date < iso(new Date()) ? ' disabled' : ''}><span>${DOW[dt.getDay()]}</span><b>${dt.getDate()}</b><small>${MON[dt.getMonth()]}</small></button>`; }).join('');
+  const dates = Array.from({length: len}, (_, i) => { const date = addDays(start, i), dt = new Date(date + 'T12:00:00'); return `<button class="wish-day${selectedDates.includes(date) ? ' on' : ''}" data-wish-date="${date}" aria-label="${dt.toLocaleDateString('ru-RU', {day:'numeric',month:'long',weekday:'long'})}" aria-pressed="${selectedDates.includes(date)}"${date < iso(new Date()) ? ' disabled' : ''}><span>${DOW[dt.getDay()]}</span><b>${dt.getDate()}</b></button>`; }).join('');
   $('#view').innerHTML = `${appbar('Сбор рациона', len + ' дней с сегодняшнего')}
     ${med ? '<div class="warn box collect-warning">Отмечено состояние здоровья, при котором автоматический рацион не подходит. Составьте питание вместе с врачом.</div>' : ''}
     <div class="panel collect-main"><label class="field"><span><em>Бюджет семьи на ${len} дней, ₽</em><input id="c-budget" name="budget" autocomplete="off" aria-describedby="budget-help" type="number" inputmode="numeric" min="0" step="100" value="${c.budget}"></span></label>
@@ -1468,15 +1514,15 @@ function cardHtml(d, m, slot, under) { // under — следующая карт�
   const ff = famFactor(d, slot), n = nut(d, ff), sec = SECTIONS[sectionOf(d)][0];
   const ing = d.ing.map(x => `<li><span>${esc(x.name)}</span><i></i><b>${fmtAmt(x, x.g * ff)}</b></li>`).join('');
   if (under) return `<article class="dcard under" aria-hidden="true"><div class="dc-hero"><div class="plate"><i></i><b>${esc((d.name.trim()[0] || '·').toUpperCase())}</b></div>
-    <div class="dc-head"><div class="dc-tags"><span>${m[1]}</span><span>${sec}</span></div><h3 class="cname">${esc(d.name)}</h3></div></div>
+    <div class="dc-head"><h3 class="cname">${esc(d.name)}</h3></div></div>
    <div class="dc-body"><div class="grid4 kb"><div><b>${r0(n.kcal)}</b><span>ккал</span></div><div><b>${r0(n.p)}</b><span>белки, г</span></div><div><b>${r0(n.f)}</b><span>жиры, г</span></div><div><b>${r0(n.c)}</b><span>углев., г</span></div></div></div></article>`;
   return `<article class="dcard" id="card" tabindex="0" aria-label="${esc(d.name)}">
    <span class="stamp st-take">Взять</span><span class="stamp st-skip">Пропуск</span><span class="stamp st-mark">Пометка</span><span class="stamp st-close">Свернуть</span>
    <div class="dc-hero"><div class="plate">${dishPhoto(d) ? `<img class="plate-photo" src="${esc(dishPhoto(d))}" width="148" height="148" alt="" onerror="this.hidden=true">` : `<i></i><b>${esc((d.name.trim()[0] || '·').toUpperCase())}</b>`}</div>
-    <div class="dc-head"><div class="dc-tags"><span>${m[1]}</span><span>${sec}</span></div><h3 class="cname">${esc(d.name)}</h3></div></div>
+    <div class="dc-head"><h3 class="cname">${esc(d.name)}</h3></div></div>
    <div class="dc-body">
     <div class="grid4 kb"><div><b>${r0(n.kcal)}</b><span>ккал</span></div><div><b>${r0(n.p)}</b><span>белки, г</span></div><div><b>${r0(n.f)}</b><span>жиры, г</span></div><div><b>${r0(n.c)}</b><span>углев., г</span></div></div>
-    <div class="facts"><div><em>Готовка</em><b>${d.time} мин</b></div><div><em>Сложность</em><b>${d.diff} из 10</b></div><div><em>Клетчатка</em><b>${r1(n.fib)} г</b></div><div><em>Стоимость</em><b>≈ ${r0(famCost(d) / 10) * 10} ₽</b></div></div>
+    <div class="facts"><div><em>Готовка</em><b>${d.time} мин</b></div><div><em>Стоимость</em><b>≈ ${r0(famCost(d) / 10) * 10} ₽</b></div></div>
     ${S.marks.notes[d.id] ? `<p class="note">${ic('heart', 'sm')} ${esc(S.marks.notes[d.id])}</p>` : ''}
     <div class="ingbox" id="ingbox"><p class="ingh">Ингредиенты · на ${S.people.length > 1 ? 'всю семью' : 'вас'}</p><ul class="ings">${ing}</ul>
      ${stepsOf(d).length ? `<p class="ingh">Как готовить</p><ol class="csteps">${stepsOf(d).map(t => `<li>${esc(t)}</li>`).join('')}</ol>` : ''}</div>
@@ -1492,17 +1538,17 @@ function viewFeed() {
   else if (F.exhausted || !F.card) card = `<article class="dcard end"><div class="dc-body"><p class="eyebrow">${m[1]}</p><h3>${F.exhausted ? 'Карточки для этого приёма закончились' : 'Подходящих блюд больше нет'}</h3><p class="hint">Выберите из показанных или добавьте сложность и бюджет в разделе «Сбор».</p><div class="actions"><button class="btn primary" id="f-pick">Выбрать из показанных</button></div></div></article>`;
   else card = cardHtml(F.card.dish, m, F.slot);
   const pd = !F.loading && F.card && F.peek ? getDish(F.peek.id) : null, under = pd ? cardHtml(pd, pat[F.peek.slot], F.peek.slot, true) : '<div class="ghostcard g1"></div>';
-  return `<section class="feedwrap" id="feedwrap"><div class="feed">
-   <header class="ftop"><button class="iconbtn" id="f-close" aria-label="Свернуть подбор">${ic('down')}</button><div class="fday"><button class="arrow" id="f-prev" aria-label="Предыдущий день">‹</button><span>${DOW[dt.getDay()]}, ${dt.getDate()} ${MON[dt.getMonth()]}</span><button class="arrow" id="f-next" aria-label="Следующий день">›</button></div><span class="fcount">${done}<small>/${total}</small></span></header>
-   <div class="slots">${pat.map((x, i) => `<button class="slot${i === F.slot ? ' on' : ''}${taken[i] ? ' done' : ''}" data-slot="${i}">${x[1]}</button>`).join('')}</div>
-   <div class="deck" id="deck"><div class="ghostcard g2"></div>${under}${card}</div>
-   <div class="fbtns">
+  const slots = `<div class="slots">${pat.map((x, i) => `<button class="slot${i === F.slot ? ' on' : ''}${taken[i] ? ' done' : ''}" data-slot="${i}">${x[1]}</button>`).join('')}</div>`;
+  const actions = `<footer class="dc-footer"><div class="fbtns">
     <button class="fb fb-skip" id="f-skip" aria-label="Пропустить">${fic('skip')}<span>Пропуск</span></button>
     <button class="fb fb-dis" id="f-dis" aria-label="Не нравится">${fic('dis')}<span>Не нравится</span></button>
     <button class="fb fb-mark" id="f-mark" aria-label="Пометка">${fic('mark')}<span>Пометка</span></button>
     <button class="fb fb-take" id="f-take" aria-label="Взять">${fic('take')}<span>Взять</span></button>
    </div>
-   <p class="gest"><span>← взять</span><span>пропуск →</span><span>↑ пометка</span><span>↓ свернуть</span></p>
+   <p class="gest"><span>← пропуск</span><span>взять →</span><span>↑ пометка</span><span>↓ свернуть</span></p></footer>`;
+  return `<section class="feedwrap" id="feedwrap"><div class="feed">
+   <header class="ftop"><button class="iconbtn" id="f-close" aria-label="Свернуть подбор">${ic('down')}</button><div class="fday"><button class="arrow" id="f-prev" aria-label="Предыдущий день">‹</button><span>${DOW[dt.getDay()]}, ${dt.getDate()} ${MON[dt.getMonth()]}</span><button class="arrow" id="f-next" aria-label="Следующий день">›</button></div><span class="fcount">${done}<small>/${total}</small></span></header>
+   <div class="deck" id="deck"><div class="ghostcard g2"></div>${under}${card.replace(/(<article[^>]*>)/, '$1' + slots).replace('</article>', actions + '</article>')}</div>
   </div></section>`;
 }
 function closeFeed() {
@@ -1527,7 +1573,7 @@ function bindFeed() {
   document.querySelectorAll('[data-slot]').forEach(b => b.onclick = () => goSlot(F.day, +b.dataset.slot));
   const live = !F.loading && F.card && !F.exhausted;
   ['#f-take', '#f-skip', '#f-dis', '#f-mark'].forEach(s => $(s).disabled = !live);
-  $('#f-take').onclick = () => fling('left'); $('#f-skip').onclick = () => fling('right'); $('#f-dis').onclick = () => fling('dis'); $('#f-mark').onclick = markSheet;
+  $('#f-take').onclick = () => fling('right'); $('#f-skip').onclick = () => fling('left'); $('#f-dis').onclick = () => fling('dis'); $('#f-mark').onclick = markSheet;
   const pk = $('#f-pick'); if (pk) pk.onclick = pickSeen;
   const card = $('#card'); if (!card || !live) return;
   const box = $('#ingbox'), more = $('#ingmore');
@@ -1542,10 +1588,10 @@ function bindFeed() {
   let g = null; // жест: старт, ось, смещение
   const set = (k, v) => card.style.setProperty('--' + k, v);
   const paint = () => { const {axis, rx, ry} = g;
-    set('take', axis === 'x' && rx < 0 ? Math.min(1, -rx / 90) : 0); set('skip', axis === 'x' && rx > 0 ? Math.min(1, rx / 90) : 0);
+    set('take', axis === 'x' && rx > 0 ? Math.min(1, rx / 90) : 0); set('skip', axis === 'x' && rx < 0 ? Math.min(1, -rx / 90) : 0);
     set('mark', axis === 'y' && ry < 0 ? Math.min(1, -ry / 70) : 0); set('close', axis === 'y' && ry > 0 ? Math.min(1, ry / 80) : 0); };
   const reset = () => { card.classList.remove('drag'); card.style.transform = ''; ['take', 'skip', 'mark', 'close'].forEach(k => set(k, 0)); };
-  card.addEventListener('pointerdown', e => { if (e.button > 0) return; g = {x0: e.clientX, y0: e.clientY, axis: null, rx: 0, ry: 0, w: card.offsetWidth}; card.setPointerCapture(e.pointerId); });
+  card.addEventListener('pointerdown', e => { if (e.button > 0 || e.target.closest('button,a,input,select,textarea')) return; g = {x0: e.clientX, y0: e.clientY, axis: null, rx: 0, ry: 0, w: card.offsetWidth}; card.setPointerCapture(e.pointerId); });
   card.addEventListener('pointermove', e => { if (!g) return;
     g.rx = e.clientX - g.x0; g.ry = e.clientY - g.y0;
     if (!g.axis) { if (Math.hypot(g.rx, g.ry) < 8) return; g.axis = Math.abs(g.rx) > Math.abs(g.ry) ? 'x' : 'y'; card.classList.add('drag'); }
@@ -1563,11 +1609,11 @@ let flinging = false;
 async function fling(dir) {
   const F = S.feed; if (flinging || !F.card || F.loading) return; flinging = true;
   const card = $('#card');
-  if (card) { card.classList.remove('drag'); if (dir !== 'dis') card.style.setProperty('--' + ({left: 'take', right: 'skip'})[dir], 1);
+  if (card) { card.classList.remove('drag'); if (dir !== 'dis') card.style.setProperty('--' + ({left: 'skip', right: 'take'})[dir], 1);
     card.style.transform = {left: 'translateX(-120%) rotate(-12deg)', right: 'translateX(120%) rotate(12deg)', dis: 'scale(.82)'}[dir]; card.style.opacity = '0'; if (dir === 'dis') card.classList.add('disliked'); await sleep(240); }
   flinging = false;
-  if (dir === 'left') return takeCard();
-  if (dir === 'right') return refuseCard(false);
+  if (dir === 'right') return takeCard();
+  if (dir === 'left') return refuseCard(false);
   return refuseCard(true);
 }
 document.addEventListener('keydown', e => {
@@ -1680,7 +1726,7 @@ function viewShop() {
   const budgetPart = budget * sel.length / S.plan.len;
   const over = budgetPart && total > budgetPart;
   const ranges = split ? [['all', 'Всё сразу'], ['a', fmtDates(pend.slice(0, 3), true)], ['b', fmtDates(pend.slice(3), true)]] : [];
-  const row = x => `<li class="${S.shop.checked[x.name] ? 'done' : ''}${x.has ? ' has' : ''}"><button data-check="${esc(x.name)}"><span class="nm">${esc(x.name)}</span><span class="am">${x.has ? 'есть дома' : x.amt}</span><span class="pr">${x.has ? '' : '≈ ' + r0(x.price / 10) * 10 + ' ₽'}</span></button></li>`;
+  const row = x => `<li class="${S.shop.checked[x.name] ? 'done' : ''}${x.has ? ' has' : ''}"><button data-check="${esc(x.name)}" aria-pressed="${!!S.shop.checked[x.name]}" aria-label="${esc(x.name)}: ${S.shop.checked[x.name] ? 'убрать отметку' : 'отметить купленным'}"><span class="nm">${esc(x.name)}</span><span class="am">${x.has ? 'есть дома' : x.amt}</span><span class="pr">${x.has ? '' : '≈ ' + r0(x.price / 10) * 10 + ' ₽'}</span></button></li>`;
   let body;
   if (S.shop.group) { const cats = {}; list.forEach(x => (cats[x.cat] = cats[x.cat] || []).push(x)); body = Object.keys(cats).sort().map(k => `<h4 class="cat">${k}</h4><ul class="shop">${cats[k].map(row).join('')}</ul>`).join(''); }
   else body = `<ul class="shop">${list.map(row).join('')}</ul>`;
@@ -1688,6 +1734,7 @@ function viewShop() {
   <div class="total"><div><span class="small">Примерно</span><b>${r0(total / 10) * 10} ₽</b></div><div><span class="small">Бюджет</span><b>${r0(budgetPart)} ₽</b></div></div>
   ${over ? `<div class="warn box">Перерасход ≈ ${r0((total - budgetPart) / 10) * 10} ₽. <button class="btn ghost sm" id="s-cheap">Удешевить 5 самых дорогих блюд</button></div>` : ''}
   ${buyHead(sel)}
+  <section class="shopping-progress" aria-label="Готовность списка покупок"><div><span>${ic('shop')} В корзине</span><b>${list.filter(x => S.shop.checked[x.name] || x.has).length}<small> / ${list.length}</small></b></div><progress max="${Math.max(1,list.length)}" value="${list.filter(x => S.shop.checked[x.name] || x.has).length}" aria-label="Продуктов отмечено"></progress><p>${list.some(x => x.has) ? 'Продукты дома уже учтены. ' : ''}Отмечайте покупки — список запомнит ваш прогресс.</p></section>
   ${split ? `<div class="seg">${ranges.map(([k, t]) => `<button class="${(S.shop.range || 'all') === k ? 'on' : ''}" data-range="${k}">${t}</button>`).join('')}</div>` : ''}
   <div class="actions two"><button class="btn ghost" id="s-group">${S.shop.group ? 'Без групп' : 'Сгруппировать'}</button><button class="btn ghost" id="s-share">Поделиться</button></div>
   ${body}
@@ -1696,7 +1743,14 @@ function viewShop() {
   ${undo}
   <p class="hint">Цены ориентировочные, по средним ценам сетевых магазинов. Нажмите на продукт, чтобы вычеркнуть.</p>`;
   v.querySelectorAll('[data-range]').forEach(b => b.onclick = () => { S.shop.range = b.dataset.range; save(); render(); });
-  v.querySelectorAll('[data-check]').forEach(b => b.onclick = () => { const k = b.dataset.check; S.shop.checked[k] = !S.shop.checked[k]; save(); render(); });
+  v.querySelectorAll('[data-check]').forEach(b => b.onclick = () => {
+    const k = b.dataset.check; S.shop.checked[k] = !S.shop.checked[k]; save();
+    b.closest('li').classList.toggle('done', S.shop.checked[k]); b.setAttribute('aria-pressed', String(!!S.shop.checked[k]));
+    b.setAttribute('aria-label', k + ': ' + (S.shop.checked[k] ? 'убрать отметку' : 'отметить купленным'));
+    const count = list.filter(x => S.shop.checked[x.name] || x.has).length;
+    $('.shopping-progress b').innerHTML = count + '<small> / ' + list.length + '</small>';
+    $('.shopping-progress progress').value = count;
+  });
   $('#s-group').onclick = () => { S.shop.group = !S.shop.group; save(); render(); };
   const text = () => 'Список покупок — Мой рацион\n' + list.filter(x => !x.has).map(x => `${S.shop.checked[x.name] ? '✓' : '•'} ${x.name} — ${x.amt}`).join('\n') + `\nИтого ≈ ${r0(total / 10) * 10} ₽`;
   const copy = async () => { try { await navigator.clipboard.writeText(text()); toast('Список скопирован'); } catch (e) { sheet(`<h3>Скопируйте текст</h3><textarea class="copybox" id="cb" readonly>${esc(text())}</textarea>`, b => { const t = $('#cb', b); t.focus(); t.select(); }); } };
@@ -1731,7 +1785,7 @@ function viewSettings() {
     v.innerHTML = `${appbar('Настройки', 'Профиль и приложение', {back: true})}
     <button class="profile" data-person="${me.id}"><span class="mono">${esc(me.name.slice(0, 1).toUpperCase())}</span><span><b>${esc(me.name)}</b><small>${r0(t.E)} ккал · белок ${r0(t.P)} г в день</small></span>${ic('chev', 'sm')}</button>
     <nav class="rows">${SET_PAGES.map(([k, t, s]) => `<button class="row" data-set="${k}"><span class="medal">${ic(SET_IC[k])}</span><span><b>${t}</b><small>${s}</small></span>${ic('chev', 'sm')}</button>`).join('')}</nav>
-    <p class="hint center">Мой рацион · версия 0.13.0</p>`;
+    <p class="hint center">Мой рацион · версия 0.14.0</p>`;
     v.querySelectorAll('[data-set]').forEach(b => b.onclick = () => { S.ui.set = b.dataset.set; save(); render(); });
     v.querySelector('[data-person]').onclick = () => editPerson(me);
     return;

@@ -154,7 +154,7 @@ const RacionAnalytics = (() => {
     const rows = Object.entries(days).filter(([date]) => date >= from && date <= until).sort(([a], [b]) => a.localeCompare(b));
     const values = {}, targets = {}, missing = {}, referenceDays = {}, people = {}, dates = new Set(), ranges = {}, excursions = {};
     for (const [date, day] of rows) for (const [id, p] of Object.entries(day.people || {})) {
-      if (pid !== 'all' && id !== pid) continue;
+      if ((pid !== 'all' && id !== pid) || p.filled === 0) continue;
       dates.add(date); people[id] = p.name;
       const own = p.limits || legacyLimits(p.targets || {});
       for (const n of data.nutrients) {
@@ -185,13 +185,13 @@ const RacionAnalytics = (() => {
   }
   function history(days, until, pid = 'all') {
     const dates = Object.entries(days).filter(([date, day]) => date <= until &&
-      (pid === 'all' ? Object.keys(day.people || {}).length : !!day.people?.[pid])).map(([date]) => date).sort();
+      (pid === 'all' ? Object.values(day.people || {}).some(p => p.filled !== 0) : day.people?.[pid] && day.people[pid].filled !== 0)).map(([date]) => date).sort();
     return {days: dates.length, first: dates[0] || null, last: dates[dates.length - 1] || null};
   }
   function daily(days, date, pid, nutrient) {
     const total = aggregate(days, date, date, pid);
     if (!total.days) return {date, state: 'empty', label: 'Нет данных', cases: [], value: null, range: {}};
-    const entries = Object.entries(days[date]?.people || {}).filter(([id]) => pid === 'all' || pid === id);
+    const entries = Object.entries(days[date]?.people || {}).filter(([id, p]) => p.filled !== 0 && (pid === 'all' || pid === id));
     const cases = entries.map(([id, p]) => {
       const own = entries.length === 1 ? total : aggregate(days, date, date, id);
       const r = assess(own.values[nutrient] || 0, own.ranges[nutrient], own.missing[nutrient]);
