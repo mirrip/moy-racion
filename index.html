@@ -1097,6 +1097,65 @@ body.empty-stream, body.empty-stream #scroller, body.empty-stream #view { backgr
 
 :root[data-theme="garden"] .analytics-caution summary { color:#62430c; }
 
+/* 0.15.1 — emerald lacquer, warm porcelain and restrained brass detailing. */
+:root[data-theme="garden"] {
+  --paper-fill:radial-gradient(ellipse at 0% 0%,#fffef7cc,transparent 55%),radial-gradient(ellipse at 100% 100%,#a7ac7740,transparent 65%),linear-gradient(125deg,#fbf5e3,#eae5ce);
+  --green-fill:radial-gradient(ellipse at 8% 0%,#6ea96640,transparent 60%),linear-gradient(135deg,#216f4a,#104b35 56%,#082e24);
+  --edge-fill:linear-gradient(135deg,#f8e7b1,#aaba91 30%,#6f855d 65%,#e5d4a2);
+  --card-shadow:inset 0 1px 0 #fffdf8,inset 0 -2px 3px #4e552b18,0 3px 0 #9ba87b66,0 7px 13px -8px #000e08,0 22px 40px -23px #000c08;
+}
+:root[data-theme="garden"] .appbar {
+  border-color:#869164;
+  background:radial-gradient(ellipse at var(--light-x,0%) var(--light-y,0%),#6eac6b47,transparent 60%),linear-gradient(125deg,#1d5f40,#0b3329 68%,#08261f);
+  box-shadow:inset 0 1px 0 #e9eec16b,inset 0 -1px 0 #061f1ac9,0 3px 0 #071e16,0 14px 28px -17px #000b07;
+}
+:root[data-theme="garden"] .appbar::after { border-color:#d8d4a547; box-shadow:0 0 0 12px #d9e5ad0a,0 0 0 30px #d9e5ad08,0 0 0 48px #d9e5ad04; }
+:root[data-theme="garden"] .appbar .eyebrow { color:#d8ddb9; letter-spacing:.13em; }
+:root[data-theme="garden"] .appbar h1 { text-shadow:0 2px 0 #000e0740; }
+:root[data-theme="garden"] .panel { border-radius:30px 14px 34px 14px; }
+:root[data-theme="garden"] .panel::after { inset:6px; border-color:#fffdf87a; box-shadow:inset 0 1px 0 #acb28414; }
+:root[data-theme="garden"] :is(.wish-panel,.collect-main)>h3,
+:root[data-theme="garden"] :is(.wish-panel,.collect-main) .cooking-head h3 { font-family:"Lora",Georgia,serif; font-weight:500; letter-spacing:-.035em; }
+:root[data-theme="garden"] #c-budget { background:radial-gradient(ellipse at 0% 0%,#5c986243,transparent 65%),linear-gradient(135deg,#173f2b,#0c3024); color:#fffbe9; color-scheme:dark; border-color:#7f9162; box-shadow:inset 0 2px 6px #001c1359,inset 0 -1px 0 #dce9b236,0 1px 0 #fffdf8; font-weight:550; font-variant-numeric:tabular-nums; letter-spacing:.025em; }
+:root[data-theme="garden"] .collect-actions .btn.primary { color:#183c2b; background:radial-gradient(ellipse at 15% 0%,#fff9d4b3,transparent 65%),linear-gradient(135deg,#f5dfa2,#dfc57d); border-color:#e8d499; box-shadow:inset 0 1px 0 #fff9d7,inset 0 -2px 2px #8b71342b,0 3px 0 #76683e,0 12px 22px -13px #000d08; }
+:root[data-theme="garden"] .collect-actions .btn.primary:not(:disabled):hover { color:#183c2b; background:linear-gradient(135deg,#ffedb8,#e7cd87); }
+:root[data-theme="garden"] .secbtn { border-radius:15px 7px 15px 7px; }
+:root[data-theme="garden"] .secbtn.on { border-color:#7d9667; box-shadow:inset 0 1px 0 #edf3bf85,inset 0 -2px 4px #001c114d,0 2px 0 #698159,0 6px 10px -6px #153c24; }
+:root[data-theme="garden"] :is(.filter-trigger,.collect-actions .btn.ghost) { border-color:#758861; box-shadow:inset 0 1px 0 #dce9bb57,inset 0 -1px 0 #001b1066,0 3px 0 #071f17,0 8px 14px -10px #000; }
+:root[data-theme="garden"] .filter-menu { border-color:#b7b990; box-shadow:inset 0 1px 0 #fffdf8,0 3px 0 #8a9778,0 18px 28px -9px #000b; }
+:root[data-theme="garden"] .wish-day { border-color:#a7b08b; box-shadow:inset 0 1px 0 #fffdf8,0 2px 0 #acb58d40; background:linear-gradient(135deg,#fffdf3,#ecebd9); }
+:root[data-theme="garden"] .meal { border-radius:26px 12px 32px 12px; }
+:root[data-theme="garden"] :is(.mname,.dcard .cname,.favorite-caption>b,.buycard h2) { font-family:"Lora",Georgia,serif; font-weight:500; letter-spacing:-.035em; }
+:root[data-theme="garden"] .mtype { color:#4f6d40; letter-spacing:.14em; }
+:root[data-theme="garden"] .macro span { border:1px solid #c4c9ac; background:linear-gradient(135deg,#f9f6e9,#e4e7ce); box-shadow:inset 0 1px 0 #fffdf8; border-radius:10px 5px 10px 5px; }
+:root[data-theme="garden"] .dish-photo-placeholder { position:relative; isolation:isolate; overflow:hidden; background:radial-gradient(ellipse at 50% 20%,#f6f0d6,transparent 65%),linear-gradient(135deg,#c9d3b0,#e5e8d0 50%,#b9c8a4); color:#4d6341; }
+:root[data-theme="garden"] .dish-photo-placeholder::before { content:""; position:absolute; z-index:-1; width:116px; height:116px; border-radius:50%; border:1px solid #fffdf8ba; background:radial-gradient(circle at 35% 25%,#fffdf878,transparent 65%); box-shadow:inset 0 0 0 8px #fffdf82e,inset 0 0 0 9px #7b916032,0 12px 20px -12px #4463335c; }
+:root[data-theme="garden"] .recipe-photo { border:1px solid #b4bf97; box-shadow:inset 0 1px 0 #fffdf8,0 4px 0 #9ba98238,0 14px 22px -16px #1c452c; border-radius:24px 10px 28px 10px; }
+:root[data-theme="garden"] .dcard { box-shadow:inset 0 1px 0 #fffdf8,0 3px 0 #97aa76,0 20px 45px -24px #000e08; }
+:root[data-theme="garden"] .dc-hero { background:radial-gradient(ellipse at 0% 0%,#fffdf8b3,transparent 70%),linear-gradient(135deg,#e9ecd6,#cfdcbf); }
+:root[data-theme="garden"] .plate { border:3px solid #f8f2df; box-shadow:0 0 0 1px #9aab7d,0 8px 14px -8px #123b25; }
+:root[data-theme="garden"] .dc-footer { background:radial-gradient(ellipse at 50% 100%,#d8dfbca3,transparent),linear-gradient(135deg,#fff8e8,#e4e1c9); border-top-color:#c5c8aa; box-shadow:inset 0 1px 0 #fffdf8,0 -6px 20px -16px #254830; }
+:root[data-theme="garden"] .grid4.kb>div { border:1px solid #c9cbb2; background:linear-gradient(135deg,#f6f2e3,#e1e4cc); box-shadow:inset 0 1px 0 #fffdf8; border-radius:16px 8px 16px 8px; }
+:root[data-theme="garden"] .nutrient-group>h3 { font-family:"Lora",Georgia,serif; font-weight:500; letter-spacing:-.035em; }
+:root[data-theme="garden"] .nutrient { --status-edge:#9ba588; border-radius:24px 10px 28px 10px; box-shadow:inset 3px 0 0 var(--status-edge),inset 0 1px 0 #fffdf8,0 3px 0 #9ba87b55,0 16px 28px -20px #000c08; }
+:root[data-theme="garden"] .nutrient.state-low { --status-edge:#d2a83c; }
+:root[data-theme="garden"] .nutrient.state-normal { --status-edge:#4a8959; }
+:root[data-theme="garden"] .nutrient.state-high { --status-edge:#c45f4e; }
+:root[data-theme="garden"] .nutrient-detail-link { padding-top:10px; border-top:1px solid #bdc4a46b; }
+:root[data-theme="garden"] .analytics-summary { background:radial-gradient(ellipse at 15% 0%,#88b56a45,transparent 65%),linear-gradient(125deg,#246444,#104231 65%,#082b23); border-color:#899a67; box-shadow:inset 0 1px 0 #f3edb878,inset 0 -2px 4px #001c1273,0 3px 0 #0a2418,0 16px 26px -16px #000e08; }
+:root[data-theme="garden"] .analytics-summary>b { text-shadow:0 2px 0 #082c1d; }
+:root[data-theme="garden"] .shopping-progress { border-color:#899a67; box-shadow:inset 0 1px 0 #f3edb85c,0 3px 0 #0a2418,0 14px 24px -17px #000e08; }
+:root[data-theme="garden"] .shop { border:1px solid #b9c29d; box-shadow:var(--card-shadow); }
+:root[data-theme="garden"] .shop li button::before { background:linear-gradient(145deg,#fffdf4,#dfe4c9); border-color:#9eae82; box-shadow:inset 0 1px 0 #fffdf8,0 2px 3px -2px #3f5d304d; }
+:root[data-theme="garden"] .shop li.done button::before { background:var(--green-fill); border-color:#557b4c; color:#fffdf8; }
+:root[data-theme="garden"] .sheet-card { box-shadow:inset 0 1px 0 #fffdf8,0 -2px 0 #bcc59f80,0 -24px 65px -20px #000e08b3; }
+:root[data-theme="garden"] #nav { background:radial-gradient(ellipse at 50% 0%,#fffdf8b3,transparent 70%),linear-gradient(135deg,#f2eddc,#dfe5cd); border-top-color:#bac59c; box-shadow:inset 0 1px 0 #fffdf8,0 -6px 20px -12px #000e0866; }
+:root[data-theme="garden"] .tab[aria-current="page"] .tab-ic { border:1px solid #789262; box-shadow:inset 0 1px 0 #edf3bf94,inset 0 -1px 0 #001c1166,0 2px 0 #829762,0 7px 10px -7px #123b24; }
+@media (min-width:860px) {
+  :root[data-theme="garden"] #app { border-color:#778560; box-shadow:inset 0 1px 0 #e5e4b64d,inset 0 0 0 7px #d2ddb00a,0 5px 0 #071f17,0 36px 70px -30px #000b07; }
+  :root[data-theme="garden"] #nav { border:1px solid #b4bf94; box-shadow:inset 0 1px 0 #fffdf8,0 4px 0 #566d464d,0 18px 30px -17px #000e08; }
+}
+
 </style>
 </head><body>
 <a class="skip-link" href="#view">К содержимому</a>
@@ -1104,9 +1163,9 @@ body.empty-stream, body.empty-stream #scroller, body.empty-stream #view { backgr
 <nav id="nav" aria-label="Разделы"><div></div></nav>
 <div id="sheet" hidden><div class="sheet-card" role="dialog" aria-modal="true" tabindex="-1"><div class="sheet-grip"><button class="btn ghost sm" id="sheet-close">Закрыть</button></div><div id="sheet-body"></div></div></div>
 <div id="toast" role="status" hidden></div>
-<script src="data.js?v=1795531774"></script>
-<script src="nutrition-data.js?v=1795531774"></script>
-<script src="analytics.js?v=1795531774"></script>
-<script src="app.js?v=1795531774"></script>
+<script src="data.js?v=1795538220"></script>
+<script src="nutrition-data.js?v=1795538220"></script>
+<script src="analytics.js?v=1795538220"></script>
+<script src="app.js?v=1795538220"></script>
 </body>
 </html>
