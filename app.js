@@ -809,7 +809,7 @@ const IC = {
  chev: '<path d="M9 5l7 7-7 7"/>', back: '<path d="M15 5l-7 7 7 7"/>',
  leaf: '<path d="M5 19c0-8 5-13 14-14-1 9-6 14-14 14z" fill="currentColor" fill-opacity=".14"/><path d="M5 19l8-8"/>'
 };
-const ic = (n, cls = '') => `<svg class="ic ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${IC[n]}</svg>`;
+const ic = (n, cls = '') => `<svg class="ic ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${IC[n]}</svg>`;
 function appbar(title, sub, opts = {}) {
   return `<header class="appbar">${opts.back ? `<button class="iconbtn" data-back aria-label="Назад">${ic('back')}</button>` : ''}<div class="ab-t"><p class="eyebrow">${sub || 'Мой рацион'}</p><h1 class="gt">${title}</h1></div>${opts.back ? '' : `<button class="iconbtn" data-gear aria-label="Настройки">${ic('gear')}</button>`}</header>`;
 }
@@ -1213,6 +1213,12 @@ function nutrientCalendar(id, pid = 'all') {
   }, {full: true, onClose: () => { if (trigger?.isConnected) trigger.focus({preventScroll: true}); }});
 }
 function viewStream() { $('#view').innerHTML = '<section class="stream-blank" aria-label="Лента"></section>'; }
+function nutrientIdentity(n) {
+  const groups = {vitamin:'Витамины',mineral:'Минералы',amino:'Аминокислоты',fat:'Липиды',macro:'Основные нутриенты',carb:'Углеводы',energy:'Энергия',other:'Другие компоненты'};
+  const symbols = {ret:'A',va:'A',car:'β',vd:'D',ve:'E',vk:'K',vc:'C',b1:'B₁',b2:'B₂',b3:'B₃',b5:'B₅',b6:'B₆',b7:'B₇',fol:'B₉',b12:'B₁₂',choline:'Х',ca:'Ca',ph:'P',mg:'Mg',k:'K',na:'Na',cl:'Cl',s:'S',fe:'Fe',zn:'Zn',cu:'Cu',mn:'Mn',se:'Se',iod:'I',fl:'F',cr:'Cr',mo:'Mo',salt:'NaCl',n3:'ω₃',n6:'ω₆',kcal:'E',p:'Б',f:'Ж',c:'У',water:'H₂O'};
+  const symbol = symbols[n.id] || (n.group === 'amino' ? 'AA' : n.group === 'fat' ? 'Ж' : 'У');
+  return `<div class="nutrient-identity"><span class="component-symbol" aria-hidden="true">${symbol}</span><div class="component-name"><small>${groups[n.group] || 'Компонент'}</small><h4>${esc(n.name)}</h4></div></div>`;
+}
 function viewAnalytics() {
   syncAnalytics();
   const now = iso(new Date()), period = ['week', 'month', 'all'].includes(S.ui.analyticsPeriod) ? S.ui.analyticsPeriod : 'week';
@@ -1238,7 +1244,7 @@ function viewAnalytics() {
     const title = above && r.state === 'normal' ? 'В среднем — норма' : r.label;
     const shortfall = r.state === 'low' ? `До нижней границы ${fmt(r.min - v)} ${u}.` : r.state === 'high' ? `Выше верхней границы на ${fmt(v - r.max)} ${u}.` : '';
     const names = above ? Object.values(alert.people).join(', ') : '';
-    return `<article class="nutrient state-${r.state}" data-nutrient="${n.id}" role="button" tabindex="0" aria-haspopup="dialog" aria-label="${esc(n.name)}: открыть календарь"><div class="nutrient-head"><h4>${esc(n.name)}</h4><span class="range-state">${title}</span></div>
+    return `<article class="nutrient state-${r.state}" data-nutrient="${n.id}" role="button" tabindex="0" aria-haspopup="dialog" aria-label="${esc(n.name)}: открыть календарь"><div class="nutrient-head">${nutrientIdentity(n)}<span class="range-state">${title}</span></div>
       <div class="nutrient-amount">${unknown ? 'Не менее ' : ''}<b>${fmt(v)} ${esc(u)}</b><span> за выбранный период</span></div>
       <div class="nutrient-band" role="img" aria-label="${esc(n.name + ': ' + title + '. ' + minimum + '. ' + maximum)}">
         <span class="range-zone range-low${r.min == null ? ' unavailable' : ''}"></span><span class="range-zone range-normal${r.min == null && r.max == null ? ' unavailable' : ''}"></span><span class="range-zone range-high${r.max == null ? ' unavailable' : ''}"></span>
@@ -1327,7 +1333,7 @@ function viewCollect() {
 }
 function dishVisual(d, cls) {
   const photo = dishPhoto(d);
-  return `<div class="dish-visual ${cls}"><span class="dish-photo-placeholder" aria-hidden="true">${ic('dish')}<small>Фото блюда</small></span>${photo ? `<img src="${esc(photo)}" width="640" height="400" alt="" loading="lazy" onerror="this.remove()">` : ''}</div>`;
+  return `<div class="dish-visual ${cls}"><span class="dish-photo-placeholder" aria-hidden="true">${ic('dish')}<small>Фото блюда</small></span>${photo ? `<img src="${esc(photo)}" width="640" height="400" alt="" draggable="false" loading="${cls === 'feed-photo' ? 'eager' : 'lazy'}" onerror="this.remove()">` : ''}</div>`;
 }
 function dishPhoto(d) {
   if (!d || typeof TT_SET === 'undefined') return '';
@@ -1533,14 +1539,14 @@ const FIC = {
 };
 const fic = n => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${FIC[n]}</svg>`;
 function cardHtml(d, m, slot, under) { // under — следующая карточка, лежит под текущей (без кнопок и жестов)
-  const ff = famFactor(d, slot), n = nut(d, ff), sec = SECTIONS[sectionOf(d)][0];
+  const ff = famFactor(d, slot), n = nut(d, ff);
   const ing = d.ing.map(x => `<li><span>${esc(x.name)}</span><i></i><b>${fmtAmt(x, x.g * ff)}</b></li>`).join('');
-  if (under) return `<article class="dcard under" aria-hidden="true"><div class="dc-hero"><div class="plate"><i></i><b>${esc((d.name.trim()[0] || '·').toUpperCase())}</b></div>
+  if (under) return `<article class="dcard under" aria-hidden="true"><div class="dc-hero">${dishVisual(d, 'feed-photo')}
     <div class="dc-head"><h3 class="cname">${esc(d.name)}</h3></div></div>
    <div class="dc-body"><div class="grid4 kb"><div><b>${r0(n.kcal)}</b><span>ккал</span></div><div><b>${r0(n.p)}</b><span>белки, г</span></div><div><b>${r0(n.f)}</b><span>жиры, г</span></div><div><b>${r0(n.c)}</b><span>углев., г</span></div></div></div></article>`;
   return `<article class="dcard" id="card" tabindex="0" aria-label="${esc(d.name)}">
    <span class="stamp st-take">Взять</span><span class="stamp st-skip">Пропуск</span><span class="stamp st-mark">Пометка</span><span class="stamp st-close">Свернуть</span>
-   <div class="dc-hero"><div class="plate">${dishPhoto(d) ? `<img class="plate-photo" src="${esc(dishPhoto(d))}" width="148" height="148" alt="" onerror="this.hidden=true">` : `<i></i><b>${esc((d.name.trim()[0] || '·').toUpperCase())}</b>`}</div>
+   <div class="dc-hero">${dishVisual(d, 'feed-photo')}
     <div class="dc-head"><h3 class="cname">${esc(d.name)}</h3></div></div>
    <div class="dc-body">
     <div class="grid4 kb"><div><b>${r0(n.kcal)}</b><span>ккал</span></div><div><b>${r0(n.p)}</b><span>белки, г</span></div><div><b>${r0(n.f)}</b><span>жиры, г</span></div><div><b>${r0(n.c)}</b><span>углев., г</span></div></div>
@@ -1556,7 +1562,7 @@ function viewFeed() {
   const dt = new Date(addDays(S.plan.start, F.day) + 'T12:00:00'), taken = S.plan.days[F.day].slots;
   const total = S.plan.len * S.plan.meals, done = allSlots().length;
   let card;
-  if (F.loading || (F.accessPending && !F.card)) card = `<article class="dcard skel"><div class="dc-hero"><div class="plate"><i></i></div><div class="dc-head"><div class="dc-tags"><span>${m[1]}</span></div><span class="sk w70"></span></div></div><div class="dc-body"><span class="sk w90"></span><span class="sk w40"></span><span class="sk w90"></span><span class="sk w70"></span><p class="hint">Подбираю блюдо под нормы дня…</p></div></article>`;
+  if (F.loading || (F.accessPending && !F.card)) card = `<article class="dcard skel"><div class="dc-hero">${dishVisual(null, 'feed-photo')}<div class="dc-head"><div class="dc-tags"><span>${m[1]}</span></div><span class="sk w70"></span></div></div><div class="dc-body"><span class="sk w90"></span><span class="sk w40"></span><span class="sk w90"></span><span class="sk w70"></span><p class="hint">Подбираю блюдо под нормы дня…</p></div></article>`;
   else if (F.exhausted || !F.card) card = `<article class="dcard end"><div class="dc-body"><p class="eyebrow">${m[1]}</p><h3>${F.exhausted ? 'Карточки для этого приёма закончились' : 'Подходящих блюд больше нет'}</h3><p class="hint">Выберите из показанных или добавьте сложность и бюджет в разделе «Сбор».</p><div class="actions"><button class="btn primary" id="f-pick">Выбрать из показанных</button></div></div></article>`;
   else card = cardHtml(F.card.dish, m, F.slot);
   const pd = !F.loading && F.card && F.peek ? getDish(F.peek.id) : null, under = pd ? cardHtml(pd, pat[F.peek.slot], F.peek.slot, true) : '<div class="ghostcard g1"></div>';
@@ -1675,7 +1681,7 @@ async function refuseCard(hard) {
 function pickSeen() {
   const F = S.feed, list = (F.seen[F.day + '-' + F.slot] || []).map(getDish).filter(d => d && d.types.includes(pattern()[F.slot][0]) && cookingFits(d, F.slot) && !isBanned(d) && allowedByDiet(d) && safeFit(d, F.day, F.slot).ok);
   if (!list.length) { toast('Ещё нет показанных блюд'); return; }
-  sheet(`<h3>Показанные блюда</h3><div class="pick">${list.map((d, i) => { const n = nut(d, famFactor(d, F.slot)); return `<button class="pickrow" data-pick="${i}"><b>${esc(d.name)}</b><span>${kbju(n)}</span></button>`; }).join('')}</div>`, b => {
+  sheet(`<h3>Показанные блюда</h3><div class="pick">${list.map((d, i) => { const n = nut(d, famFactor(d, F.slot)); return `<button class="pickrow" data-pick="${i}">${dishVisual(d, 'seen-photo')}<span class="seen-caption"><b>${esc(d.name)}</b><span>${kbju(n)}</span></span></button>`; }).join('')}</div>`, b => {
     b.querySelectorAll('[data-pick]').forEach(x => x.onclick = () => { F.card = {dish: list[+x.dataset.pick], src: 'seen'}; F.exhausted = false; closeSheet(); takeCard(); });
   });
 }
@@ -1807,7 +1813,7 @@ function viewSettings() {
     v.innerHTML = `${appbar('Настройки', 'Профиль и приложение', {back: true})}
     <button class="profile" data-person="${me.id}"><span class="mono">${esc(me.name.slice(0, 1).toUpperCase())}</span><span><b>${esc(me.name)}</b><small>${r0(t.E)} ккал · белок ${r0(t.P)} г в день</small></span>${ic('chev', 'sm')}</button>
     <nav class="rows">${SET_PAGES.map(([k, t, s]) => `<button class="row" data-set="${k}"><span class="medal">${ic(SET_IC[k])}</span><span><b>${t}</b><small>${s}</small></span>${ic('chev', 'sm')}</button>`).join('')}</nav>
-    <p class="hint center">Мой рацион · версия 0.15.1</p>`;
+    <p class="hint center">Мой рацион · версия 0.15.2</p>`;
     v.querySelectorAll('[data-set]').forEach(b => b.onclick = () => { S.ui.set = b.dataset.set; save(); render(); });
     v.querySelector('[data-person]').onclick = () => editPerson(me);
     return;

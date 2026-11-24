@@ -1156,6 +1156,98 @@ body.empty-stream, body.empty-stream #scroller, body.empty-stream #view { backgr
   :root[data-theme="garden"] #nav { border:1px solid #b4bf94; box-shadow:inset 0 1px 0 #fffdf8,0 4px 0 #566d464d,0 18px 30px -17px #000e08; }
 }
 
+/* 0.15.2 — gold recipe bezels and a real photo area in the swipe deck. */
+:root[data-theme="garden"] :is(.meal,.favorite-card,.pickrow[data-pick],.dcard) {
+  border:2px solid #c6a75f;
+  box-shadow:inset 0 1px 0 #fff9d1,0 1px 0 #8b713c,0 0 0 1px #f2d89326,0 16px 30px -20px #000c08;
+}
+:root[data-theme="garden"] .favorite-card:hover,
+:root[data-theme="garden"] .pickrow[data-pick]:hover { border-color:#ddbf77; }
+.dcard .dc-hero { flex-direction:column; align-items:stretch; gap:0; min-height:0; padding:0; }
+.dcard .dc-head { align-self:stretch; padding:12px 16px 14px; min-width:0; }
+.dcard .feed-photo { display:block; flex:none; width:100%; height:clamp(110px,18dvh,165px); border-bottom:1px solid #b6b999; }
+.dcard .feed-photo .dish-photo-placeholder::before { width:96px; height:96px; }
+:root[data-theme="garden"] .dcard .dc-hero { flex-direction:column; align-items:stretch; gap:0; padding:0; }
+:root[data-theme="garden"] .dcard .dc-head { background:radial-gradient(ellipse at 0% 0%,#fffdf87a,transparent 75%),linear-gradient(135deg,#e9ecd6,#d4dfc3); border-bottom:1px solid #bec8a6; }
+:root[data-theme="garden"] .dcard .feed-photo { border-bottom-color:#c6a75f; }
+.pickrow[data-pick] { display:flex; align-items:center; gap:14px; }
+.pickrow[data-pick] .seen-photo { width:76px; height:76px; flex:none; border-radius:14px 6px 14px 6px; border:1px solid #b6bd97; }
+.pickrow[data-pick] .seen-photo .dish-photo-placeholder small { display:none; }
+.pickrow[data-pick] .seen-photo .dish-photo-placeholder::before { width:56px; height:56px; }
+.pickrow[data-pick] .seen-photo .ic { width:28px; height:28px; }
+.pickrow[data-pick] .seen-caption { display:grid; gap:6px; min-width:0; }
+.pickrow[data-pick] .seen-caption>span { display:flex; flex-wrap:wrap; gap:4px 8px; }
+@media (max-height:700px) {
+  .dcard .feed-photo { height:100px; }
+  .dcard .dc-head { padding:8px 14px 10px; }
+}
+@media (max-height:600px) and (min-width:600px) {
+  :root[data-theme="garden"] .dcard .dc-hero { padding:8px 12px; justify-content:center; gap:8px; }
+  :root[data-theme="garden"] .dcard .feed-photo { height:70px; border:1px solid #bca064; border-radius:12px 6px 12px 6px; }
+  :root[data-theme="garden"] .dcard .dc-head { background:none; padding:0; border:0; }
+  :root[data-theme="garden"] .dcard .feed-photo .dish-photo-placeholder::before { width:56px; height:56px; }
+  :root[data-theme="garden"] .dcard .feed-photo .dish-photo-placeholder .ic { width:26px; height:26px; }
+  :root[data-theme="garden"] .dcard .feed-photo .dish-photo-placeholder small { display:none; }
+}
+
+/* Purchased products fill the complete row, including both side gutters. */
+:root[data-theme="garden"] .shop { padding:0; }
+:root[data-theme="garden"] .shop li button { padding-inline:20px; border-radius:0; }
+:root[data-theme="garden"] .shop li.done button { background:linear-gradient(120deg,#c3d6ad,#d9e4c5); box-shadow:inset 3px 0 0 #4b7843,inset 0 1px 0 #eef4df7a; border-bottom-color:#aabf97; }
+:root[data-theme="garden"] .shop li.done .nm { text-decoration:none; color:#244a30; }
+:root[data-theme="garden"] .shop li.done :is(.am,.pr) { color:#405d38; }
+:root[data-theme="garden"] .shop li button:focus-visible { outline-offset:-4px; }
+
+@media (max-height:650px) and (max-width:599px) {
+  .dcard .feed-photo { height:84px; }
+  .dcard .dc-head { padding:8px 14px; }
+  .dcard .cname { font-size:1.125rem; }
+  :root[data-theme="garden"] .dcard>.slots { padding:8px 10px; }
+  :root[data-theme="garden"] .dcard .facts div { padding:5px 10px; }
+  .dcard .feed-photo .dish-photo-placeholder::before { width:64px; height:64px; }
+}
+
+/* The component identity leads; its assessment is a secondary annotation. */
+:root[data-theme="garden"] .nutrient-head { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:start; gap:10px; }
+.nutrient-identity { display:flex; align-items:center; gap:12px; min-width:0; }
+.component-name { min-width:0; }
+.component-name>small { display:block; color:var(--muted); font-size:.625rem; font-weight:500; letter-spacing:.06em; margin-bottom:4px; }
+:root[data-theme="garden"] .nutrient .component-name h4 { font-size:1.125rem; font-weight:650; line-height:1.3; letter-spacing:-.025em; margin:0; color:#133b2a; overflow-wrap:anywhere; }
+:root[data-theme="garden"] .nutrient .component-name h4::after { content:none; }
+.component-symbol { flex:none; display:grid; place-items:center; width:42px; height:46px; border-radius:15px 7px 15px 7px; font-size:1.0625rem; font-weight:550; font-variant-numeric:lining-nums; letter-spacing:-.04em; background:var(--gg); color:var(--on-gold); border:1px solid var(--line); }
+:root[data-theme="garden"] .component-symbol { background:radial-gradient(ellipse at 15% 0%,#91b47f40,transparent 70%),linear-gradient(135deg,#286447,#10432f); color:#f6ecc9; border-color:#a8ae75; box-shadow:inset 0 1px 0 #ebefc66b,0 2px 0 #96a06a4d,0 6px 12px -9px #073323; }
+:root[data-theme="garden"] .nutrient .range-state { max-width:86px; font-size:.6875rem; font-weight:500; line-height:1.35; padding:4px 6px; border-radius:8px 4px 8px 4px; border:1px solid #d0cfb9; background:#eeedde; color:#526247; }
+:root[data-theme="garden"] .nutrient.state-low .range-state { color:#71521a; background:#f1ecda; border-color:#d6c9a1; }
+:root[data-theme="garden"] .nutrient.state-high .range-state { color:#873d31; background:#f1e8dc; border-color:#d7b8a8; }
+:root[data-theme="garden"] .nutrient.state-normal .range-state { color:#355e3e; background:#e7ebd9; border-color:#bdc9ab; }
+:root[data-theme="garden"] .nutrient-band { height:10px; }
+:root[data-theme="garden"] .range-low { background:linear-gradient(135deg,#e5d18b,#d3b561); }
+:root[data-theme="garden"] .range-normal { background:linear-gradient(135deg,#9db88a,#6e9c70); }
+:root[data-theme="garden"] .range-high { background:linear-gradient(135deg,#dfa38d,#c88170); }
+:root[data-theme="garden"] .range-labels { font-size:.6875rem; font-weight:500; }
+/* One optical weight and sculpted backplates for the vector icon family. */
+:root[data-theme="garden"] .ic { stroke-width:1.65; stroke-linecap:round; stroke-linejoin:round; }
+:root[data-theme="garden"] .ic [fill-opacity] { fill-opacity:.16; }
+:root[data-theme="garden"] .tab .tab-ic { border:1px solid #b5c09a; background:linear-gradient(135deg,#fffbed,#dce4c9); border-radius:13px 6px 16px 6px; box-shadow:inset 0 1px 0 #fffdf8,0 2px 0 #a9b48c40; }
+:root[data-theme="garden"] .tab .ic { width:21px; height:21px; }
+:root[data-theme="garden"] .tab[aria-current="page"] .tab-ic { background:var(--green-fill); border-color:#8e9f68; box-shadow:inset 0 1px 0 #f3edb878,inset 0 -1px 0 #001d1166,0 3px 0 #879966,0 7px 12px -8px #0b321e; }
+:root[data-theme="garden"] .iconbtn { background:radial-gradient(ellipse at 20% 0%,#fffdf8a6,transparent 70%),linear-gradient(135deg,#f7f2df,#dfe5ca); border-color:#acba91; color:#30573c; box-shadow:inset 0 1px 0 #fffdf8,0 2px 0 #9cae7a4d,0 6px 12px -9px #123a23; }
+:root[data-theme="garden"] .appbar .iconbtn { background:radial-gradient(ellipse at 20% 0%,#b8c98b38,transparent 70%),linear-gradient(135deg,#335e3c,#153a2a); color:#f0e1a7; border-color:#a6ab74; box-shadow:inset 0 1px 0 #eef0bc6b,inset 0 0 0 3px #f4ecc40a,0 3px 0 #0b2e21,0 8px 14px -8px #001a10; }
+:root[data-theme="garden"] .medal { background:radial-gradient(ellipse at 15% 0%,#fffdf8a6,transparent 70%),linear-gradient(135deg,#ecedda,#cedabb); color:#2c6142; border:1px solid #a5b589; border-radius:15px 7px 17px 7px; box-shadow:inset 0 1px 0 #fffdf8,0 2px 0 #93a5764d,0 6px 10px -8px #1d452b; }
+:root[data-theme="garden"] .field.switch>.ic { flex:none; width:36px; height:36px; padding:7px; border:1px solid #adb992; border-radius:13px 6px 15px 6px; color:#306443; background:linear-gradient(135deg,#f6f5e6,#d6e0c2); box-shadow:inset 0 1px 0 #fffdf8,0 2px 0 #a2b18838; }
+:root[data-theme="garden"] .addbtn { border-color:#aab68e; box-shadow:inset 0 1px 0 #fffdf8,0 2px 0 #a4b3874d,0 6px 10px -8px #234b2c; }
+:root[data-theme="garden"] .dc-footer .fb svg { box-shadow:inset 0 1px 0 #fff8d58c,inset 0 -1px 0 #40582b26,0 2px 0 #a4ad7a66,0 7px 12px -9px #123723; }
+:root[data-theme="garden"] .dc-footer .fb-take svg { box-shadow:inset 0 1px 0 #f2edba94,inset 0 -2px 2px #001a114d,0 3px 0 #7e915c,0 8px 12px -8px #123723; }
+@media (max-width:359px) {
+  .nutrient-identity { gap:8px; }
+  .component-symbol { width:34px; height:40px; font-size:.875rem; }
+  :root[data-theme="garden"] .nutrient-head { gap:6px; }
+  :root[data-theme="garden"] .nutrient .range-state { max-width:76px; }
+}
+
+.component-name>small, .nutrient .range-state { overflow-wrap:anywhere; }
+.component-symbol { font-size:clamp(14px,1.0625rem,20px); }
+
 </style>
 </head><body>
 <a class="skip-link" href="#view">К содержимому</a>
@@ -1163,9 +1255,9 @@ body.empty-stream, body.empty-stream #scroller, body.empty-stream #view { backgr
 <nav id="nav" aria-label="Разделы"><div></div></nav>
 <div id="sheet" hidden><div class="sheet-card" role="dialog" aria-modal="true" tabindex="-1"><div class="sheet-grip"><button class="btn ghost sm" id="sheet-close">Закрыть</button></div><div id="sheet-body"></div></div></div>
 <div id="toast" role="status" hidden></div>
-<script src="data.js?v=1795538220"></script>
-<script src="nutrition-data.js?v=1795538220"></script>
-<script src="analytics.js?v=1795538220"></script>
-<script src="app.js?v=1795538220"></script>
+<script src="data.js?v=1795538630"></script>
+<script src="nutrition-data.js?v=1795538630"></script>
+<script src="analytics.js?v=1795538630"></script>
+<script src="app.js?v=1795538630"></script>
 </body>
 </html>
