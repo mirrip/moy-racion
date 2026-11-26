@@ -1413,6 +1413,68 @@ body.empty-stream, body.empty-stream #scroller, body.empty-stream #view { backgr
 .dcard.large-text .dc-content { overflow:auto; }
 .dcard.large-text .dc-content .dc-body { flex:none; }
 
+/* 0.18 — quiet shopping, an explicit price review and a living card stack. */
+.store-selector { display:grid; gap:8px; margin:0 0 16px; }
+.store-selector>label { font-size:.8125rem; color:var(--muted); }
+.store-selector select { width:100%; }
+.store-selector .hint { margin:0; }
+.price-review-btn { display:flex; align-items:center; justify-content:space-between; gap:10px; margin:12px 0 18px; text-align:left; }
+.price-review-btn>span { flex:1; }
+.shopping-options { margin:16px 0; font-size:.8125rem; }
+.shopping-options summary { padding:12px 0; cursor:pointer; }
+#fridge-editor[hidden] { display:none; }
+.price-meals { display:grid; gap:14px; margin:20px 0; }
+.price-meal { display:grid; grid-template-columns:110px minmax(0,1fr); gap:16px; padding:12px; border:2px solid #c8a34e; border-radius:25px 12px 28px 12px; background:var(--surface); color:var(--fg); overflow:hidden; }
+.price-photo { width:110px; height:100%; min-height:110px; max-height:180px; border-radius:16px 7px 18px 7px; }
+.price-meal>div:last-child { display:grid; gap:8px; min-width:0; }
+.price-meal h2 { font-family:"Lora",Georgia,serif; font-size:1.125rem; margin:0; line-height:1.25; overflow-wrap:anywhere; }
+.price-meal small { font-size:.6875rem; color:var(--muted); }
+.price-meal b { font-size:1.25rem; }
+.price-meal .btn { min-height:40px; padding:8px 10px; font-size:.8125rem; }
+:root[data-theme="garden"] .price-meal { --fg:#163b29;--muted:#56644f;--surface:#fffdf8;--line:#bac29e;--gold:#18583e;--color-focus:#836421;background:var(--paper-fill);box-shadow:var(--card-shadow); }
+:root[data-theme="garden"] .price-review-btn { background:linear-gradient(135deg,#1d5f40,#0b3929); border-color:#8b9e68; color:#fff9e4; box-shadow:inset 0 1px 0 #ecf0bd55,0 3px 0 #0b291d; }
+:root[data-theme="garden"] :is(.meal .meal-photo,.dcard .feed-photo) { border-radius:0 0 22px 8px; }
+:root[data-theme="garden"] .dc-footer { padding:6px 10px; }
+:root[data-theme="garden"] .dc-footer .fb { min-height:49px; gap:2px; font-size:10.5px; }
+:root[data-theme="garden"] .dc-footer .fb svg { width:18px; height:18px; padding:7px; }
+:root[data-theme="garden"] .dc-footer .gest { font-size:9px; margin-top:5px; }
+:root[data-theme="garden"] .dcard .ingmore { border-color:#8eaa6d; background:linear-gradient(135deg,#eff3d5,#d9e5bd); font-weight:600; box-shadow:inset 0 1px 0 #fffdf8; }
+:root[data-theme="garden"] .deck { margin-bottom:19px; }
+:root[data-theme="garden"] .deck .under { transform:translateY(13px) scale(.965); opacity:1; box-shadow:0 3px 0 #8b9a66; }
+:root[data-theme="garden"] .ghostcard.g2 { transform:translateY(20px) scale(.93); opacity:.55; background:#3c6845; }
+:root[data-theme="garden"] .dcard { transition:transform 170ms ease-out,opacity 170ms ease-out; }
+:root[data-theme="garden"] .tt-card.tt-card { --fg:#fff9e7;--muted:#c9dbb8;--surface:#16452f;--surface2:#25563a;--gold:#ead69f;--line:#869662; border:3px solid #c8a34e; border-radius:30px 14px 34px 14px; background:radial-gradient(ellipse at 0% 0%,#417f4c55,transparent 75%),linear-gradient(140deg,#1b5539,#0d3428); box-shadow:inset 0 1px 0 #e8efbc44,0 4px 0 #78643a,0 18px 30px -18px #000e08; }
+:root[data-theme="garden"] .tt-card .tt-name { color:#fff9e7; font-family:"Lora",Georgia,serif; font-weight:500; font-size:1.375rem; }
+:root[data-theme="garden"] .tt-card .tt-meta { color:#d1dfc0; padding-bottom:4px; }
+:root[data-theme="garden"] .tt-card .tt-ing { padding-bottom:14px; }
+:root[data-theme="garden"] .tt-img { border-radius:0 0 24px 8px; }
+:root[data-theme="garden"] .tt-btn { border:1px solid #a8b47c; box-shadow:inset 0 1px 0 #eff0c466,0 3px 0 #193d28,0 9px 15px -10px #000c08; }
+:root[data-theme="garden"] .tt-btn svg { width:27px; height:27px; }
+:root[data-theme="garden"] .tt-btn.tt-x { background:var(--green-fill); color:#fff7df; }
+:root[data-theme="garden"] .tt-btn.tt-h { background:linear-gradient(135deg,#f0dca0,#d6bc74); color:#214b30; }
+@media (min-width:860px) {
+  .price-meals { grid-template-columns:repeat(2,minmax(0,1fr)); }
+}
+@media (max-width:359px) {
+  .price-meal { grid-template-columns:86px minmax(0,1fr); gap:10px; }
+  .price-photo { width:86px; min-height:100px; }
+}
+@media (max-height:700px) {
+  :root[data-theme="garden"] .deck { margin-bottom:12px; }
+  :root[data-theme="garden"] .deck .under { transform:translateY(9px) scale(.97); }
+  :root[data-theme="garden"] .ghostcard.g2 { transform:translateY(14px) scale(.94); }
+  :root[data-theme="garden"] .dc-footer { padding:3px 8px; }
+  :root[data-theme="garden"] .dc-footer .fb { min-height:44px; }
+}
+
+:root[data-theme="garden"] #sheet:has(#tt-stack) .sheet-card {
+  --fg:#fff9e7; --muted:#c9dbb8; --line:#789260; --surface:#16452f; --color-focus:#efd582;
+  color:var(--fg); color-scheme:dark;
+  background:radial-gradient(ellipse at 10% 0%,#38784b55,transparent 65%),linear-gradient(145deg,#153d2b,#09271f);
+}
+:root[data-theme="garden"] #sheet:has(#tt-stack) .sheet-grip::before { background:#a1b57d; }
+:root[data-theme="garden"] #sheet:has(#tt-stack) .tt-skip { color:#d1dfc0; }
+
 </style>
 </head><body>
 <a class="skip-link" href="#view">К содержимому</a>
@@ -1420,10 +1482,10 @@ body.empty-stream, body.empty-stream #scroller, body.empty-stream #view { backgr
 <nav id="nav" aria-label="Разделы"><div></div></nav>
 <div id="sheet" hidden><div class="sheet-card" role="dialog" aria-modal="true" tabindex="-1"><div class="sheet-grip"><button class="btn ghost sm" id="sheet-close">Закрыть</button></div><div id="sheet-body"></div></div></div>
 <div id="toast" role="status" hidden></div>
-<script src="data.js?v=1795541771"></script>
-<script src="nutrition-data.js?v=1795541771"></script>
-<script src="analytics.js?v=1795541771"></script>
-<script src="pantry.js?v=1795541771"></script>
-<script src="app.js?v=1795541771"></script>
+<script src="data.js?v=1795718154"></script>
+<script src="nutrition-data.js?v=1795718154"></script>
+<script src="analytics.js?v=1795718154"></script>
+<script src="pantry.js?v=1795718154"></script>
+<script src="app.js?v=1795718154"></script>
 </body>
 </html>

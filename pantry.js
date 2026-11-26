@@ -9,7 +9,7 @@ const RacionPantry = (() => {
     ((i.id && x.id && String(x.id) === String(i.id)) || norm(x.name) === norm(i.name)));
   function create(raw, legacy = [], catalog = []) {
     if (raw?.v === 2 && Array.isArray(raw.items)) {
-      return {v:2, items:raw.items.filter(x => x && x.name && (x.amount === null || valid(x.amount))), packs:Object.fromEntries(Object.entries(raw.packs || {}).filter(([,p])=>p&&valid(p.size)&&p.size>0&&(p.price==null||valid(p.price)))), receipts:Array.isArray(raw.receipts)?raw.receipts:[], revision:raw.revision || 0};
+      return {v:2, items:raw.items.filter(x => x && x.name && (x.amount === null || valid(x.amount))), packs:Object.fromEntries(Object.entries(raw.packs || {}).filter(([,p])=>p&&(p.loose===true||(valid(p.size)&&p.size>0&&(p.price==null||valid(p.price)))))), receipts:Array.isArray(raw.receipts)?raw.receipts:[], revision:raw.revision || 0};
     }
     const items = [];
     for (const name of legacy) {
@@ -29,20 +29,26 @@ const RacionPantry = (() => {
   }
   function remove(state,i) { const item=find(state,i); if(item){state.items.splice(state.items.indexOf(item),1);state.revision++;} }
   function setPack(state, i, pack) {
-    if (!pack) { delete state.packs[key(i)]; return; }
+    if (!pack) { state.packs[key(i)]={loose:true}; return; }
     if (!valid(pack.size) || pack.size <= 0 || (pack.price != null && !valid(pack.price))) throw new Error('Проверьте размер и цену упаковки');
     state.packs[key(i)] = {size:clean(pack.size),price:pack.price == null ? null : +pack.price};
+  }
+  function defaultPack(i) {
+    if(i.unit==='ml' && /молок|кефир|ряженк/i.test(i.name))return {size:1000,price:null};
+    if((!i.unit || i.unit==='g') && /греч|(?:^|\s)рис(?:$|\s)|пшено|перлов|булгур|фасоль сух|сухая фасоль/i.test(i.name))return {size:1000,price:null};
+    return null;
   }
   function quote(state, i, need, useStock, round) {
     if (!valid(need)) throw new Error('Некорректная потребность');
     const item=find(state,i), available=+item?.amount || 0;
     const used=useStock ? Math.min(available,need) : 0, missing=clean(Math.max(0,need-used));
-    const pack=state.packs[key(i)] || (item && state.packs[key(item)]) || null;
+    const preference=state.packs[key(i)] || (item && state.packs[key(item)]);
+    const pack=preference?.loose?null:preference||defaultPack(i);
     const count=pack && missing>1e-6 ? Math.ceil((missing-1e-7)/pack.size) : 0;
     const buy=missing<=1e-6 ? 0 : pack ? clean(count*pack.size) : round(i,missing).g;
-    const price=pack?.price != null ? count*pack.price : buy*(+i.price || +item?.price || 0)/1000;
+    const price=pack?.price != null ? count*pack.price : buy*(i.storePriceKnown ? +i.price : (+i.price || +item?.price || 0))/1000;
     return {i:meta(i),key:key(i),need:clean(need),available,used:clean(used),missing,buy:clean(buy),count,pack,price,
-      priceKnown:buy===0 || pack?.price != null || (+i.price || +item?.price || 0)>0,
+      priceKnown:buy===0 || pack?.price != null || i.storePriceKnown || (+i.price || +item?.price || 0)>0,
       after:clean(available+buy-need),useStock:!!useStock};
   }
   function purchase(state, rows, signature, dates) {
@@ -77,5 +83,5 @@ const RacionPantry = (() => {
     const n=+String(value).replace(',','.'); if(!valid(n))throw new Error('Проверьте количество');
     return clean(n*(unit==='kg'||unit==='l'?1000:unit==='pcs'?(+i.pcs_g||55):1));
   }
-  return {norm,key,find,create,put,remove,setPack,quote,purchase,canUndo,undo,names,coverage,toBase};
+  return {norm,key,find,create,put,remove,setPack,quote,purchase,canUndo,undo,names,coverage,toBase,defaultPack};
 })();

@@ -66,6 +66,7 @@ const defaults = () => ({
   collect: {budget: 6000, sections: [0, 1], sectionsBySlot: {}, homeOn: true, home: [], cook2: false, otherCuisines: false},
   analytics: {v: 1, days: {}},
   fridge: {v:2,items:[],packs:{},receipts:[],revision:0},
+  priceSources: {selected:'catalog',stores:[],prices:{}},
   lib: {}, banned: {ids: [], names: []}, cool: {}, seenEver: [], dishStore: {}, imports: [], taste: {w: {}, mode: 'self', done: false}, aiTimes: [], firstCollect: null,
   plan: null, feed: null, lastWeek: null, access: null, fbq: [], apiLog: null, pricesAt: 0, pool: null,
   shop: {checked: {}, group: false, range: 'all', bought: {}, lastBought: null},
@@ -85,8 +86,11 @@ try { S = Object.assign(defaults(), JSON.parse(localStorage.getItem(KEY) || '{}'
   S.analytics.days = S.analytics.days || {};
   S.collect.sectionsBySlot = S.collect.sectionsBySlot || {};
   let savedFridge; try { savedFridge=JSON.parse(localStorage.getItem(KEY) || '{}').fridge; } catch {}
-  if (savedFridge?.v !== 2) S.collect.homeOn = true;
+  if(savedFridge?.v!==2)S.collect.homeOn=true;
   S.fridge=RacionPantry.create(savedFridge,S.collect.home || [],Object.values(ING));
+  S.priceSources=Object.assign({selected:'catalog',stores:[],prices:{}},S.priceSources||{});
+  if(!Array.isArray(S.priceSources.stores))S.priceSources.stores=[];
+  if(S.feed)S.feed.exhausted=false;
   S.ui.wishDates = [];
   delete S.ui.autoProgress;
   if (!S.srvDefault) { if (!S.settings.serverUrl) S.settings.serverUrl = DEFAULT_SERVER; S.srvDefault = 1; } // 0.8.4: адрес сервера по умолчанию (один раз)
@@ -504,10 +508,10 @@ async function nextCard() {
   F.counter = (F.counter || 0) + 1;
   let dish = null, src = 'new';
   const hq = (F.homeQueue || []).findIndex(x => F.day <= 1 && fitsSlot(x, ctx, 'repeat'));
-  const pk = F.peek && F.peek.day === F.day && F.peek.slot === F.slot ? poolTake(F.peek.id, ctx) : null; // карточка, которая уже лежала под текущей
+  const pk = readyPeek(F.peek,ctx); // карточка, которая уже лежала под текущей
   F.peek = null;
-  if (hq >= 0) { dish = F.homeQueue.splice(hq, 1)[0]; src = 'home'; }
-  else if (pk) { dish = pk; src = 'new'; }
+  if (pk) { dish=pk;src='new';F.homeQueue=(F.homeQueue||[]).filter(d=>d.id!==pk.id); }
+  else if (hq >= 0) { dish = F.homeQueue.splice(hq, 1)[0]; src = 'home'; }
   else if (F.counter % 5 === 0) { dish = await pickNew(ctx); src = 'new'; }
   else {
     const full = libMerged(ctx.type, 'main', ctx.slot).length >= capacity(ctx.type);
@@ -517,20 +521,44 @@ async function nextCard() {
     for (const s of seq) { dish = s === 'new' ? await pickNew(ctx) : pickCircle(s, ctx); if (dish) { src = s; break; } }
   }
   if (!dish) { dish = rank([...Object.values(DBMAP), ...Object.values(S.dishStore).filter(d => d.src === 'server')].filter(d => fitsSlot(d, ctx, 'repeat')), ctx)[0] || null; src = 'main'; } // И2: повтор блюда (в т. ч. из кругов) лучше пустого приёма
+  if (!dish) { dish=cachedCandidate({...ctx,seen:new Set()},null,true); }
   if (!dish && Server.on() && !F.accessPending) { dish = await serverLast(ctx); src = 'new'; } // пустой приём недопустим: последний шанс — сервер
   if (S.feed !== F || !F.active) return;
   F.card = dish ? {dish, src} : null;
-  if (dish) { if (!F.accessPending) F.seen[key].push(dish.id); rememberDish(dish); if (!F.accessPending) peekNext(dish); }
+  if (dish) { if (!F.accessPending && !F.seen[key].includes(dish.id)) F.seen[key].push(dish.id); rememberDish(dish); peekNext(dish); }
   if (S.feed === F && F.active) save();
 }
 function nextEmptyAfter(day, slot) { // приём, на который перейдёт подбор после «Взять»
   for (let k = 0; k < S.plan.len; k++) { const d = (day + k) % S.plan.len; for (let i = 0; i < S.plan.meals; i++) if (!S.plan.days[d].slots[i] && !(d === day && i === slot)) return [d, i]; }
   return null;
 }
-function peekNext(cur) { // следующая карточка заранее лежит под текущей (из запаса, без запроса)
-  const F = S.feed, nx = nextEmptyAfter(F.day, F.slot); if (!nx || !Server.on()) return;
-  const ctx = feedCtx(nx[0], nx[1]); ctx.seen.add(cur.id); if (nx[0] === F.day) ctx.extra = cur;
-  const d = poolPick(ctx, true); if (d) F.peek = {day: nx[0], slot: nx[1], id: d.id};
+function cachedCandidate(ctx,exclude=null,recycle=false) {
+  const all=[...Object.values(DBMAP),...Object.values(S.dishStore),...(S.feed?.homeQueue||[])],unique=[...new Map(all.map(d=>[d.id,d])).values()];
+  let options=unique.filter(d=>d.id!==exclude && !(S.cool[d.id]>Date.now()) && fitsSlot(d,ctx,'repeat'));
+  if(!options.length)options=unique.filter(d=>d.id!==exclude && fitsSlot(d,ctx,'repeat'));
+  if(!options.length && recycle){const again={...ctx,seen:new Set(exclude?[exclude]:[])};options=unique.filter(d=>d.id!==exclude && fitsSlot(d,again,'repeat'));}
+  return rank(options,ctx)[0]||null;
+}
+function readyPeek(peek,ctx) {
+  if(!peek || peek.day!==ctx.day || peek.slot!==ctx.slot)return null;
+  const d=getDish(peek.id);const checked=peek.recycle?{...ctx,seen:new Set([...ctx.seen].filter(id=>id!==peek.id))}:ctx;if(!d || !fitsSlot(d,checked,'repeat'))return null;
+  if(Server.on())poolTake(d.id,ctx);return d;
+}
+function peekNext(cur) {
+  const F=S.feed;if(!F?.active)return;
+  const ctx=feedCtx(F.day,F.slot);ctx.seen.add(cur.id);
+  const skip=cachedCandidate(ctx,cur.id,true)||cachedCandidate({...ctx,seen:new Set()},null,true);F.peek=skip?{day:F.day,slot:F.slot,id:skip.id,recycle:ctx.seen.has(skip.id)}:null;
+  F.takePeek=null;
+  const nx=nextEmptyAfter(F.day,F.slot);if(nx){const day=S.plan.days[F.day],old=day.slots[F.slot];
+    try{day.slots[F.slot]={dish:cur,status:null};const next=feedCtx(nx[0],nx[1]);const d=cachedCandidate(next,cur.id,true);if(d)F.takePeek={day:nx[0],slot:nx[1],id:d.id};}
+    finally{day.slots[F.slot]=old;}
+  }
+  const preview=F.peek||F.takePeek;if(preview){const photo=dishPhoto(getDish(preview.id));if(photo && typeof Image!=='undefined')new Image().src=photo;}
+}
+function selectFeedPreview(action) {
+  const F=S.feed,peek=action==='take'?F.takePeek:F.peek;if(!peek)return;
+  const current=$('#deck .under'),d=getDish(peek.id);if(!current||!d||current.dataset.previewId===d.id)return;
+  const t=document.createElement('div');t.innerHTML=cardHtml(d,pattern()[peek.slot],peek.slot,true);const card=t.firstElementChild;card.dataset.previewId=d.id;current.replaceWith(card);
 }
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 async function withLoading(fn) { // скелет — только если карточка не нашлась мгновенно
@@ -675,7 +703,7 @@ function poolState() {
 }
 function pruneStore() { // кэш блюд не растёт бесконечно: остаётся всё, на что есть ссылки
   const keep = new Set([...Object.values(S.lib).flatMap(sys => Object.values(sys).flatMap(L => [...L.main, ...L.sec])), ...S.banned.ids, ...(S.imports || []).flatMap(x => x.ids || []),
-    ...Object.values((S.pool || {}).q || {}).flat(), ...Object.values((S.feed || {}).seen || {}).flat()]);
+    ...Object.values((S.pool || {}).q || {}).flat(), ...Object.values((S.feed || {}).seen || {}).flat(),S.feed?.peek?.id,S.feed?.takePeek?.id]);
   Object.keys(S.dishStore).forEach(id => { if (!keep.has(id)) delete S.dishStore[id]; });
 }
 function poolWant(P) { // сколько добрать по приёмам; пусто — запас полон или база кончилась
@@ -834,9 +862,9 @@ function render() {
     if (old) { const t = document.createElement('div'); t.innerHTML = viewFeed(); const nw = t.firstElementChild; ['.ftop', '.deck'].forEach(q => { const a = old.querySelector(q), b = nw.querySelector(q); if (a && b) a.replaceWith(b); }); }
     else v.innerHTML = viewFeed();
     bindFeed(); $('#nav').hidden = true; return; }
-  if (S.ui.tab === 'settings' || S.ui.tab === 'fridge') $('#nav').hidden = true;
+  if (['settings','fridge','prices'].includes(S.ui.tab)) $('#nav').hidden = true;
   document.body.classList.toggle('empty-stream', S.ui.tab === 'stream');
-  ({plan: viewPlan, stream: viewStream, analytics: viewAnalytics, collect: viewCollect, shop: viewShop, fridge: viewFridge, settings: viewSettings}[S.ui.tab] || viewPlan)();
+  ({plan: viewPlan, stream: viewStream, analytics: viewAnalytics, collect: viewCollect, shop: viewShop, fridge: viewFridge, prices: viewPrices, settings: viewSettings}[S.ui.tab] || viewPlan)();
   bindSurfaceLight();
 }
 
@@ -1496,7 +1524,7 @@ function firstEmpty(fromDay = 0) {
   for (let k = 0; k < S.plan.len; k++) { const d = (fromDay + k) % S.plan.len; for (let i = 0; i < S.plan.meals; i++) if (!S.plan.days[d].slots[i]) return [d, i]; }
   return null;
 }
-const CARD_LIMIT = 15;
+
 async function startFeed(day, slot, manual, accessPending = false) {
   if (autoRun || Object.values(S.settings.medical).some(Boolean)) return;
   S.feed = Object.assign({v4: true, seen: {}, used: {}, counter: 0, homeQueue: []}, S.feed && S.feed.v4 ? S.feed : {}, {active: true, day, slot, manual, card: null, peek: null, loading: true, exhausted: false, aiWarned: false, accessPending, detailsId: null});
@@ -1527,7 +1555,7 @@ const fic = n => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" str
 function cardHtml(d, m, slot, under) { // under — следующая карточка, лежит под текущей (без кнопок и жестов)
   const ff = famFactor(d, slot), n = nut(d, ff), expanded = !under && S.feed?.detailsId === d.id;
   const ing = d.ing.map(x => `<li><span>${esc(x.name)}</span><i></i><b>${fmtAmt(x, x.g * ff)}</b></li>`).join('');
-  if (under) return `<article class="dcard under" aria-hidden="true"><div class="dc-hero">${dishVisual(d, 'feed-photo')}
+  if (under) return `<article class="dcard under" aria-hidden="true" data-preview-id="${esc(d.id)}"><div class="dc-hero">${dishVisual(d, 'feed-photo')}
     <div class="dc-head"><h3 class="cname">${esc(d.name)}</h3></div></div>
    <div class="dc-body"><div class="grid4 kb"><div><b>${r0(n.kcal)}</b><span>ккал</span></div><div><b>${r0(n.p)}</b><span>белки, г</span></div><div><b>${r0(n.f)}</b><span>жиры, г</span></div><div><b>${r0(n.c)}</b><span>углев., г</span></div></div></div></article>`;
   return `<article class="dcard${expanded ? ' details-open' : ''}" id="card" tabindex="0" aria-label="${esc(d.name)}">
@@ -1548,10 +1576,10 @@ function viewFeed() {
   const total = S.plan.len * S.plan.meals, done = allSlots().length;
   let card;
   if (F.loading || (F.accessPending && !F.card)) card = `<article class="dcard skel"><div class="dc-hero">${dishVisual(null, 'feed-photo')}<div class="dc-head"><div class="dc-tags"><span>${m[1]}</span></div><span class="sk w70"></span></div></div><div class="dc-body"><span class="sk w90"></span><span class="sk w40"></span><span class="sk w90"></span><span class="sk w70"></span><p class="hint">Подбираю блюдо под нормы дня…</p></div></article>`;
-  else if (F.exhausted || !F.card) card = `<article class="dcard end"><div class="dc-body"><p class="eyebrow">${m[1]}</p><h3>${F.exhausted ? 'Карточки для этого приёма закончились' : 'Подходящих блюд больше нет'}</h3><p class="hint">Выберите из показанных или добавьте сложность и бюджет в разделе «Сбор».</p><div class="actions"><button class="btn primary" id="f-pick">Выбрать из показанных</button></div></div></article>`;
+  else if (!F.card) card = `<article class="dcard searching"><div class="dc-body"><p class="eyebrow">${m[1]}</p><h3>Подбираем следующий вариант</h3><p class="hint">Сохраняем выбранное время готовки и ограничения питания.</p><button class="btn primary" id="f-retry">Проверить ещё</button><button class="btn ghost" id="f-conditions">Условия подбора</button></div></article>`;
   else card = cardHtml(F.card.dish, m, F.slot);
   if (!card.includes('id="card"')) card = card.replace(/(<article[^>]*>)/, '$1<div class="dc-content">').replace('</article>', '</div></article>');
-  const pd = !F.loading && F.card && F.peek ? getDish(F.peek.id) : null, under = pd ? cardHtml(pd, pat[F.peek.slot], F.peek.slot, true) : '<div class="ghostcard g1"></div>';
+  const pd = !F.loading && F.card && (F.peek||F.takePeek) ? getDish((F.peek||F.takePeek).id) : null, under = pd ? cardHtml(pd, pat[(F.peek||F.takePeek).slot], (F.peek||F.takePeek).slot, true) : '<div class="ghostcard g1"></div>';
   const slots = `<div class="slots">${pat.map((x, i) => `<button class="slot${i === F.slot ? ' on' : ''}${taken[i] ? ' done' : ''}" data-slot="${i}">${x[1]}</button>`).join('')}</div>`;
   const actions = `<footer class="dc-footer"><div class="fbtns">
     <button class="fb fb-skip" id="f-skip" aria-label="Пропустить">${fic('skip')}<span>Пропуск</span></button>
@@ -1590,6 +1618,8 @@ function bindFeed() {
   const live = !F.loading && F.card && !F.exhausted && !F.accessPending;
   ['#f-take', '#f-skip', '#f-dis', '#f-mark'].forEach(s => $(s).disabled = !live);
   $('#f-take').onclick = () => fling('right'); $('#f-skip').onclick = () => fling('left'); $('#f-dis').onclick = () => fling('dis'); $('#f-mark').onclick = markSheet;
+  const retry=$('#f-retry');if(retry)retry.onclick=()=>withLoading(nextCard);
+  const conditions=$('#f-conditions');if(conditions)conditions.onclick=()=>{S.feed.active=false;S.ui.tab='collect';save();render();};
   const pk = $('#f-pick'); if (pk) { pk.disabled = !!F.accessPending; pk.onclick = pickSeen; }
   const card = $('#card'); if (!card) return;
   bindFeed.observer?.disconnect();
@@ -1599,7 +1629,7 @@ function bindFeed() {
   if (!live) return;
   let g = null; // жест: старт, ось, смещение
   const set = (k, v) => card.style.setProperty('--' + k, v);
-  const paint = () => { const {axis, rx, ry} = g;
+  const paint = () => { const {axis, rx, ry} = g; if(axis==='x')selectFeedPreview(rx>0?'take':'skip');
     set('take', axis === 'x' && rx > 0 ? Math.min(1, rx / 90) : 0); set('skip', axis === 'x' && rx < 0 ? Math.min(1, -rx / 90) : 0);
     set('mark', axis === 'y' && ry < 0 ? Math.min(1, -ry / 70) : 0); set('close', axis === 'y' && ry > 0 ? Math.min(1, ry / 80) : 0); };
   const reset = () => { card.classList.remove('drag'); card.style.transform = ''; ['take', 'skip', 'mark', 'close'].forEach(k => set(k, 0)); };
@@ -1620,9 +1650,10 @@ function bindFeed() {
 let flinging = false;
 async function fling(dir) {
   const F = S.feed; if (flinging || !F.card || F.loading || F.accessPending) return; flinging = true;
+  selectFeedPreview(dir==='right'?'take':'skip');
   const card = $('#card');
   if (card) { card.classList.remove('drag'); if (dir !== 'dis') card.style.setProperty('--' + ({left: 'skip', right: 'take'})[dir], 1);
-    card.style.transform = {left: 'translateX(-120%) rotate(-12deg)', right: 'translateX(120%) rotate(12deg)', dis: 'scale(.82)'}[dir]; card.style.opacity = '0'; if (dir === 'dis') card.classList.add('disliked'); await sleep(240); }
+    card.style.transform = {left: 'translateX(-120%) rotate(-12deg)', right: 'translateX(120%) rotate(12deg)', dis: 'scale(.82)'}[dir]; card.style.opacity = '0'; if (dir === 'dis') card.classList.add('disliked'); await sleep(170); }
   flinging = false;
   if (dir === 'right') return takeCard();
   if (dir === 'left') return refuseCard(false);
@@ -1637,7 +1668,7 @@ document.addEventListener('keydown', e => {
   if (k) { e.preventDefault(); fling(k); } else if (e.key === 'ArrowUp') { e.preventDefault(); markSheet(); }
 });
 function goDay(delta) { const F = S.feed; const d = (F.day + delta + S.plan.len) % S.plan.len; const slot = S.plan.days[d].slots.findIndex(s => !s); goSlot(d, slot < 0 ? 0 : slot); }
-async function goSlot(day, slot) { const F = S.feed; F.day = day; F.slot = slot; F.detailsId = null; F.card = null; F.exhausted = (F.used[day + '-' + slot] || 0) >= CARD_LIMIT; if (F.exhausted) return render(); await withLoading(nextCard); }
+async function goSlot(day, slot) { const F = S.feed; F.day = day; F.slot = slot; F.detailsId = null; F.card = null; F.exhausted=false; await withLoading(nextCard); }
 function place(dish) {
   const F = S.feed, pat = pattern(); if (F.accessPending) return false;
   const r = safePlace(F.day, F.slot, dish, {manual: F.manual});
@@ -1652,16 +1683,15 @@ async function takeCard() {
   if (place(F.card.dish) === false) { F.card = null; save(); await withLoading(nextCard); return; }
   const next = firstEmpty(F.day);
   if (!next) { F.active = false; S.ui.tab = 'plan'; save(); render(); toast('Рацион собран. Список покупок готов.'); return; }
-  F.manual = false; save(); await goSlot(next[0], next[1]);
+  F.manual = false; F.peek=F.takePeek; F.takePeek=null; save(); await goSlot(next[0], next[1]);
 }
 async function refuseCard(hard) {
   const F = S.feed, key = F.day + '-' + F.slot, d = F.card.dish, type = pattern()[F.slot][0];
   if (!S.seenEver.includes(d.id)) S.seenEver.push(d.id);
   if (hard) { ban(d); toast('Больше не предложу'); }
-  else { feedback(d, 'skip'); const r = libRefuse(d, type); if (r === 'ban') toast('Второй отказ — блюдо удалено из ваших'); }
+  else { feedback(d,'skip'); S.cool[d.id]=Date.now()+10*60*1000; }
   F.used[key] = (F.used[key] || 0) + 1;
-  if (F.used[key] >= CARD_LIMIT) { F.exhausted = true; F.card = null; save(); render(); return; }
-  F.card = null; F.peek = null; save(); await withLoading(nextCard);
+  F.exhausted=false; F.card = null; save(); await withLoading(nextCard);
 }
 function pickSeen() {
   const F = S.feed, list = (F.seen[F.day + '-' + F.slot] || []).map(getDish).filter(d => d && d.types.includes(pattern()[F.slot][0]) && cookingFits(d, F.slot) && !isBanned(d) && allowedByDiet(d) && safeFit(d, F.day, F.slot).ok);
@@ -1715,7 +1745,7 @@ function shopList(days) {
   days.forEach(d => S.plan.days[d].slots.forEach((sl,i) => { if(!sl || sl.unsafe || sl.status==='skipped') return; const ff=famFactor(sl.dish,i); sl.dish.ing.forEach(x=>add(x,x.g*ff)); }));
   const addons=planAddons(); days.forEach(d=>(addons[d]||[]).forEach(x=>add(x.ing,x.g)));
   return map.filter(({g})=>g>1e-6).map(({i,g})=>{
-    const q=RacionPantry.quote(S.fridge,i,g,S.collect.homeOn,roundAmt);
+    const q=RacionPantry.quote(S.fridge,storeIngredient(i),g,true,roundAmt);
     return {...q,name:i.name,cat:i.cat,has:q.missing<=1e-6,amt:q.pack && q.buy>0 ? `${q.count} уп. × ${stockAmount(q.pack.size,i)}` : stockAmount(q.buy,i)};
   }).sort((a,b)=>a.name.localeCompare(b.name,'ru'));
 }
@@ -1748,12 +1778,12 @@ function stockCatalog() {
 }
 function openFridge(from='shop') { S.ui.fridgeReturn=from; S.ui.tab='fridge'; S.ui.set=null; save(); render(); }
 function fridgeHtml() { return `<button class="fridge-entry" id="s-fridge"><span class="medal">${ic('fridge')}</span><span><b>Мой холодильник</b><small>Продуктов: ${S.fridge.items.length} · остатки и упаковки</small></span>${ic('chev')}</button>`; }
-function bindFridge() { const b=$('#s-fridge'); if(b)b.onclick=()=>openFridge(); }
+function bindFridge() { const b=$('#s-fridge'); if(b)b.onclick=()=>openFridge(); const prices=$('#s-prices');if(prices)prices.onclick=()=>{S.ui.tab='prices';save();render();};bindStore(); }
 function quantityOptions(i,selected) {
   return (i.unit==='ml' ? [['ml','мл'],['l','л']] : i.unit==='pcs' ? [['pcs','шт.']] : [['g','г'],['kg','кг']]).map(([v,t])=>`<option value="${v}"${v===selected?' selected':''}>${t}</option>`).join('');
 }
 function packageSheet(i) {
-  const pack=S.fridge.packs[RacionPantry.key(i)], unit=i.unit==='ml'?'ml':i.unit==='pcs'?'pcs':'g';
+  const pref=S.fridge.packs[RacionPantry.key(i)],pack=pref?.loose?null:pref||RacionPantry.defaultPack(i), unit=i.unit==='ml'?'ml':i.unit==='pcs'?'pcs':'g';
   const size=pack ? (unit==='pcs'?pack.size/(+i.pcs_g||55):pack.size) : (unit==='pcs'?1:1000);
   sheet(`<h2>Упаковка · ${esc(i.name)}</h2><form id="pack-form"><label>Как покупать<select id="pack-mode"><option value="loose"${!pack?' selected':''}>На вес / поштучно</option><option value="pack"${pack?' selected':''}>Целыми упаковками</option></select></label><div id="pack-fields"><div class="row2"><label>Количество в упаковке<input id="pack-size" type="number" min="0.001" max="1000000" step="any" value="${size}" required></label><label>Единица<select id="pack-unit">${quantityOptions(i,unit)}</select></label></div><label>Цена одной упаковки, ₽<input id="pack-price" type="number" min="0" step="0.01" value="${pack?.price ?? ''}" placeholder="Необязательно"></label><p class="hint">Если цену не указать, используем цену продукта за килограмм или литр из каталога.</p></div><p id="pack-error" role="alert"></p><button class="btn primary wide" type="submit">Сохранить</button></form>`,body=>{
     const update=()=>{const on=$('#pack-mode').value==='pack';$('#pack-fields').hidden=!on;$('#pack-size').disabled=!on;}; update();$('#pack-mode').onchange=update;
@@ -1762,17 +1792,69 @@ function packageSheet(i) {
 }
 function viewFridge() {
   const items=[...S.fridge.items].sort((a,b)=>a.name.localeCompare(b.name,'ru'));
-  $('#view').innerHTML=`${appbar('Мой холодильник','Остатки для следующих рационов',{back:true})}<section class="panel stock-intro"><p>Здесь остаётся лишнее из купленных упаковок. Нужная часть уже отложена на подтверждённый рацион.</p><div class="field switch"><span><em>Использовать остатки</em><small>Учитывать в покупках и подборе блюд</small></span><button class="tog${S.collect.homeOn?' on':''}" id="fridge-use" role="switch" aria-checked="${S.collect.homeOn}" aria-label="Использовать остатки"><i></i></button></div></section>
-    <section class="panel gap"><h2 class="stock-form-title">Остаток продукта</h2><form id="fridge-form"><label>Продукт<input id="fridge-name" list="fridge-products" maxlength="100" autocomplete="off" required placeholder="Гречка, миндаль…"></label><datalist id="fridge-products">${stockCatalog().map(i=>`<option value="${esc(i.name)}"></option>`).join('')}</datalist><div class="row2"><label>Сколько осталось<input id="fridge-amount" type="number" min="0" max="1000000" step="any" required placeholder="600"></label><label>Единица<select id="fridge-unit"><option value="g">г</option><option value="kg">кг</option><option value="ml">мл</option><option value="l">л</option><option value="pcs">шт.</option></select></label></div><p id="fridge-error" role="alert"></p><button class="btn primary wide" type="submit">Сохранить остаток</button><button class="btn ghost wide" id="fridge-cancel" type="button" hidden>Отменить редактирование</button></form></section>
-    <section class="stock-list" aria-label="Продукты в холодильнике">${items.length?items.map((i,index)=>{const pack=S.fridge.packs[RacionPantry.key(i)];return `<article class="stock-card"><div><h3>${esc(i.name)}</h3><b>${stockAmount(i.amount,i)}</b>${pack?`<p>Упаковка ${stockAmount(pack.size,i)}${pack.price!=null?' · '+pack.price+' ₽':''}</p>`:''}</div><div class="stock-actions"><button class="btn ghost sm" data-stock-edit="${index}">Изменить</button><button class="btn ghost sm" data-stock-pack="${index}">Упаковка</button><button class="iconbtn" data-stock-remove="${index}" aria-label="${esc('Удалить '+i.name)}">${fic('skip')}</button></div></article>`;}).join(''):'<div class="empty"><h3>Пока нет остатков</h3><p>Добавьте то, что есть дома. Остатки новых упаковок появятся после подтверждения закупки.</p></div>'}</section>`;
+  $('#view').innerHTML=`${appbar('Мой холодильник','Остатки для следующих рационов',{back:true})}<button class="btn primary wide" id="fridge-add-product">${ic('plus')} Добавить продукт</button>
+    <section class="panel gap" id="fridge-editor" hidden><h2 class="stock-form-title">Остаток продукта</h2><form id="fridge-form"><label>Продукт<input id="fridge-name" list="fridge-products" maxlength="100" autocomplete="off" required placeholder="Гречка, миндаль…"></label><datalist id="fridge-products">${stockCatalog().map(i=>`<option value="${esc(i.name)}"></option>`).join('')}</datalist><div class="row2"><label>Сколько осталось<input id="fridge-amount" type="number" min="0" max="1000000" step="any" required placeholder="600"></label><label>Единица<select id="fridge-unit"><option value="g">г</option><option value="kg">кг</option><option value="ml">мл</option><option value="l">л</option><option value="pcs">шт.</option></select></label></div><p id="fridge-error" role="alert"></p><button class="btn primary wide" type="submit">Сохранить остаток</button><button class="btn ghost wide" id="fridge-cancel" type="button" hidden>Отменить редактирование</button></form></section>
+    <section class="stock-list" aria-label="Продукты в холодильнике">${items.length?items.map((i,index)=>{const pref=S.fridge.packs[RacionPantry.key(i)],pack=pref?.loose?null:pref||RacionPantry.defaultPack(i);return `<article class="stock-card"><div><h3>${esc(i.name)}</h3><b>${stockAmount(i.amount,i)}</b>${pack?`<p>Упаковка ${stockAmount(pack.size,i)}${pack.price!=null?' · '+pack.price+' ₽':''}</p>`:''}</div><div class="stock-actions"><button class="btn ghost sm" data-stock-edit="${index}">Изменить</button><button class="btn ghost sm" data-stock-pack="${index}">Упаковка</button><button class="iconbtn" data-stock-remove="${index}" aria-label="${esc('Удалить '+i.name)}">${fic('skip')}</button></div></article>`;}).join(''):'<div class="empty"><h3>Пока нет остатков</h3><p>Добавьте то, что есть дома. Остатки новых упаковок появятся после подтверждения закупки.</p></div>'}</section>`;
   let editing=null;
+  $('#fridge-add-product').onclick=()=>{$('#fridge-editor').hidden=false;$('#fridge-name').focus();};
   $('#fridge-name').onchange=()=>{const i=stockCatalog().find(i=>RacionPantry.norm(i.name)===RacionPantry.norm($('#fridge-name').value));if(i)$('#fridge-unit').value=i.unit==='ml'?'ml':i.unit==='pcs'?'pcs':'g';};
   $('#fridge-form').onsubmit=e=>{e.preventDefault();try{const name=$('#fridge-name').value.trim(),unit=$('#fridge-unit').value;const i=editing||stockCatalog().find(i=>RacionPantry.norm(i.name)===RacionPantry.norm(name))||{name,unit:unit==='ml'||unit==='l'?'ml':unit==='pcs'?'pcs':'g',pcs_g:55};if((i.unit==='ml')!==['ml','l'].includes(unit) || (i.unit==='pcs')!==(unit==='pcs'))throw new Error('Выберите единицу измерения этого продукта');RacionPantry.put(S.fridge,i,RacionPantry.toBase($('#fridge-amount').value,unit,i));syncFridgeHome();save();render();$('#fridge-name').focus({preventScroll:true});}catch(error){$('#fridge-error').textContent=error.message;}};
   $('#fridge-cancel').onclick=()=>render();
-  document.querySelectorAll('[data-stock-edit]').forEach(b=>b.onclick=()=>{editing=items[+b.dataset.stockEdit];$('#fridge-name').value=editing.name;$('#fridge-name').readOnly=true;$('#fridge-unit').value=editing.unit==='ml'?'ml':editing.unit==='pcs'?'pcs':'g';$('#fridge-amount').value=editing.amount==null?'':editing.unit==='pcs'?editing.amount/(+editing.pcs_g||55):editing.amount;$('#fridge-cancel').hidden=false;$('#fridge-amount').focus();});
+  document.querySelectorAll('[data-stock-edit]').forEach(b=>b.onclick=()=>{editing=items[+b.dataset.stockEdit];$('#fridge-editor').hidden=false;$('#fridge-name').value=editing.name;$('#fridge-name').readOnly=true;$('#fridge-unit').value=editing.unit==='ml'?'ml':editing.unit==='pcs'?'pcs':'g';$('#fridge-amount').value=editing.amount==null?'':editing.unit==='pcs'?editing.amount/(+editing.pcs_g||55):editing.amount;$('#fridge-cancel').hidden=false;$('#fridge-amount').focus();});
   document.querySelectorAll('[data-stock-pack]').forEach(b=>b.onclick=()=>packageSheet(items[+b.dataset.stockPack]));
   document.querySelectorAll('[data-stock-remove]').forEach(b=>b.onclick=()=>{RacionPantry.remove(S.fridge,items[+b.dataset.stockRemove]);syncFridgeHome();save();render();});
-  $('#fridge-use').onclick=()=>{S.collect.homeOn=!S.collect.homeOn;save();render();$('#fridge-use').focus({preventScroll:true});};
+
+}
+function selectedPriceStore() { return S.priceSources.stores.find(x=>x.id===S.priceSources.selected)||null; }
+function storeIngredient(i) {
+  const prices=S.priceSources.prices[S.priceSources.selected]||{},raw=prices[RacionPantry.key(i)]??prices[i.id],value=typeof raw==='number'?raw:raw?.pricePerKg;
+  return Number.isFinite(value)&&value>=0?{...i,price:value,storePriceKnown:true}:i;
+}
+function storeHtml() {
+  const store=selectedPriceStore(),prices=S.priceSources.prices[S.priceSources.selected]||{};
+  return `<section class="store-selector"><label for="shop-store">Магазин</label><select id="shop-store"><option value="catalog">Базовые цены</option>${S.priceSources.stores.map(x=>`<option value="${esc(x.id)}"${x.id===S.priceSources.selected?' selected':''}>${esc(x.name)}</option>`).join('')}<option value="__new">Добавить магазин…</option></select>${store?`<p class="hint">${Object.keys(prices).length?'Расчёт с доступными ценами магазина; остальные — из каталога.':'Цены этого магазина ещё не подключены. Пока используется базовый каталог.'}</p>`:''}</section>`;
+}
+function bindStore() {
+  const select=$('#shop-store');if(!select)return;
+  select.onchange=()=>{if(select.value!=='__new'){S.priceSources.selected=select.value;save();render();return;}
+    select.value=S.priceSources.selected;
+    sheet('<h2>Добавить магазин</h2><form id="store-form"><label>Название магазина<input id="store-name" maxlength="80" required autocomplete="off" placeholder="Название магазина"></label><p class="hint">Обновление цен подключается отдельно. До этого расчёт останется по базовому каталогу.</p><button class="btn primary wide" type="submit">Добавить</button></form>',body=>{
+      $('#store-form').onsubmit=e=>{e.preventDefault();const name=$('#store-name').value.trim();if(!name)return;let store=S.priceSources.stores.find(x=>nameKey(x.name)===nameKey(name));if(!store){store={id:'store_'+crypto.randomUUID(),name};S.priceSources.stores.push(store);}S.priceSources.selected=store.id;save();closeSheet();render();};
+    });
+  };
+}
+function dishPrice(d,slot) {
+  const factor=famFactor(d,slot),delta=d.ing.reduce((sum,i)=>{const source=storeIngredient(i);return sum+(source.storePriceKnown?(source.price-(+i.price||0))*i.g*factor/1000:0);},0);
+  return Math.max(0,famCost(d)+delta);
+}
+function priceMeals() {
+  if(!S.plan)return [];
+  return S.plan.days.flatMap((day,d)=>day.slots.map((sl,slot)=>sl&&!sl.unsafe&&sl.status!=='skipped'?{day:d,slot,sl,price:dishPrice(sl.dish,slot)}:null).filter(Boolean)).sort((a,b)=>b.price-a.price||a.day-b.day||a.slot-b.slot);
+}
+function cheaperCandidate(day,slot) {
+  if(Object.values(S.settings.medical).some(Boolean))return null;
+  const old=S.plan?.days[day]?.slots[slot];if(!old||old.leftover||S.shop.bought[addDays(S.plan.start,day)])return null;
+  const ctx={day,slot,type:pattern()[slot][0],tg:slotTarget(day,slot),seen:new Set([old.dish.id])};
+  const next=S.plan.days[day+1]?.slots[slot],paired=next?.leftover&&next.dish.id===old.dish.id;
+  if(paired && S.shop.bought[addDays(S.plan.start,day+1)])return null;
+  return [...new Map([...Object.values(DBMAP),...Object.values(S.dishStore)].map(d=>[d.id,d])).values()].filter(d=>fitsSlot(d,ctx,'repeat')&&!usedInPlan(d.id)&&dishPrice(d,slot)<dishPrice(old.dish,slot)-.01&&(!paired||safeFit(d,day+1,slot).ok)).sort((a,b)=>dishPrice(a,slot)-dishPrice(b,slot))[0]||null;
+}
+async function replaceCheaper(day,slot) {
+  if(Object.values(S.settings.medical).some(Boolean))return false;
+  const plan=S.plan,old=plan?.days[day]?.slots[slot];if(!old||old.leftover||S.shop.bought[addDays(plan.start,day)])return false;
+  let d=cheaperCandidate(day,slot);
+  if(!d&&Server.on())try{await fetchDishes({day,slot,type:pattern()[slot][0],tg:slotTarget(day,slot),seen:new Set([old.dish.id])},{count:8});}catch(error){noteServerError(error);}
+  if(S.plan!==plan||plan.days[day].slots[slot]!==old)return false;
+  d=d||cheaperCandidate(day,slot);if(!d)return false;
+  const next=plan.days[day+1]?.slots[slot],paired=next?.leftover&&next.dish.id===old.dish.id;
+  const first=safePlace(day,slot,d,{automatic:true});if(!first.ok)return false;
+  if(paired&&!safePlace(day+1,slot,d,{leftover:true}).ok){plan.days[day].slots[slot]=old;plan.days[day+1].slots[slot]=next;return false;}
+  libTake(d,pattern()[slot][0]);feedback(d,'take');save();return {before:old.dish.name,after:d.name,saving:Math.max(0,dishPrice(old.dish,slot)-dishPrice(d,slot))};
+}
+function viewPrices() {
+  const meals=priceMeals(),store=selectedPriceStore();
+  $('#view').innerHTML=`${appbar('Цены рациона',store?.name||'Самое дорогое — сверху',{back:true})}<p class="hint">${store&&!Object.keys(S.priceSources.prices[store.id]||{}).length?'Цены магазина ещё не подключены — показаны базовые ориентиры. ':''}Примерная стоимость на семью. Заменяется только выбранное блюдо с сохранением условий подбора.</p><div class="price-meals">${meals.length?meals.map(({day,slot,sl,price})=>`<article class="price-meal">${dishVisual(sl.dish,'price-photo')}<div><small>${esc(fmtDates([day],true))} · ${pattern()[slot][1]}</small><h2>${esc(sl.dish.name)}</h2><b>≈ ${r0(price)} ₽</b><button class="btn ghost" data-price-replace="${day}:${slot}"${sl.leftover||S.shop.bought[addDays(S.plan.start,day)]||Object.values(S.settings.medical).some(Boolean)?' disabled':''}>${sl.leftover?'Повтор блюда':S.shop.bought[addDays(S.plan.start,day)]?'Уже закуплено':'Заменить дешевле'}</button></div></article>`).join(''):'<div class="empty"><h2>Рацион ещё не собран</h2></div>'}</div><p id="price-message" role="status" aria-live="polite"></p>`;
+  document.querySelectorAll('[data-price-replace]').forEach(button=>button.onclick=async()=>{const [day,slot]=button.dataset.priceReplace.split(':').map(Number);button.disabled=true;button.textContent='Ищем дешевле…';const result=await replaceCheaper(day,slot);if(S.ui.tab!=='prices')return;viewPrices();$('#price-message').textContent=result?`${result.after}. Экономия примерно ${r0(result.saving)} ₽.`:'Более дешёвого подходящего варианта пока нет. Блюдо сохранено.';});
 }
 function viewShop() {
   const v = $('#view');
@@ -1780,35 +1862,36 @@ function viewShop() {
   const undoable=S.shop.lastBought && S.shop.lastBought.some(k=>S.shop.bought[k]) && (!S.shop.receiptId || RacionPantry.canUndo(S.fridge,S.shop.receiptId));
   const undo=undoable?'<p class="buyundo">Закупка подтверждена. <button class="linkbtn" id="s-undo">Отменить закупку</button></p>':'';
   const bindUndo=()=>{const u=$('#s-undo');if(u)u.onclick=()=>{try{undoShopping();save();render();}catch(error){toast(error.message);}};};
-  if (!S.plan || !S.plan.days.some(d => d.slots.some(Boolean))) { v.innerHTML = `${appbar('Продукты', 'Список покупок')}${fridgeHtml()}<section class="buycard"><h2 class="gt">Закупка пока не собрана</h2><p class="buysub">Соберите рацион — здесь появится список продуктов на собранные дни</p><button class="btn primary" id="s-go">Собрать рацион</button></section>`; $('#s-go').onclick = goCollect; bindFridge(); return; }
+  if (!S.plan || !S.plan.days.some(d => d.slots.some(Boolean))) { v.innerHTML = `${appbar('Продукты', 'Список покупок')}${fridgeHtml()}${storeHtml()}<button class="btn ghost wide price-review-btn" id="s-prices">${ic('analytics')} Посмотреть цены ${ic('chev')}</button><section class="buycard"><h2 class="gt">Закупка пока не собрана</h2><p class="buysub">Соберите рацион — здесь появится список продуктов на собранные дни</p><button class="btn primary" id="s-go">Собрать рацион</button></section>`; $('#s-go').onclick = goCollect; bindFridge(); return; }
   const {pend, split, sel} = shopDays();
   if (!pend.length) { const bd = S.plan.days.map((d, i) => i).filter(i => S.shop.bought[dayDate(i)]);
-    v.innerHTML = `${appbar('Продукты', 'Список покупок')}${fridgeHtml()}<section class="buycard"><h2 class="gt">${bd.length?'Всё собранное закуплено':'Нет продуктов к покупке'}</h2><p class="buysub">${bd.length ? `Закуплено: ${fmtDates(bd)}. ` : ''}Соберите следующие дни — список появится здесь</p><button class="btn primary" id="s-go">Собрать рацион</button></section>${undo}`;
+    v.innerHTML = `${appbar('Продукты', 'Список покупок')}${fridgeHtml()}${storeHtml()}<button class="btn ghost wide price-review-btn" id="s-prices">${ic('analytics')} Посмотреть цены ${ic('chev')}</button><section class="buycard"><h2 class="gt">${bd.length?'Всё собранное закуплено':'Нет продуктов к покупке'}</h2><p class="buysub">${bd.length ? `Закуплено: ${fmtDates(bd)}. ` : ''}Соберите следующие дни — список появится здесь</p><button class="btn primary" id="s-go">Собрать рацион</button></section>${undo}`;
     $('#s-go').onclick = goCollect; bindUndo(); bindFridge(); return; }
   const list=shopList(sel), total=list.reduce((sum,row)=>sum+row.price,0), unknownPrices=list.filter(row=>!row.priceKnown).length, budget=+S.collect.budget||0;
   const budgetPart = budget * sel.length / S.plan.len;
   const over = budgetPart && total > budgetPart;
   const ranges = split ? [['all', 'Всё сразу'], ['a', fmtDates(pend.slice(0, 3), true)], ['b', fmtDates(pend.slice(3), true)]] : [];
-  const row=x=>`<li class="${S.shop.checked[x.name]?'done':''}${x.has?' has':''}"><button data-check="${esc(x.name)}" aria-pressed="${!!S.shop.checked[x.name]}" aria-label="${esc(x.name+': '+(S.shop.checked[x.name]?'убрать отметку':'отметить покупку'))}"><span class="nm">${esc(x.name)}</span><span class="am">${x.has?'Из холодильника: '+stockAmount(x.used,x.i):x.amt}</span><span class="pr">${x.buy===0?'':x.priceKnown?'≈ '+r0(x.price)+' ₽':'Цена не указана'}</span></button><div class="purchase-detail"><span>Нужно ${stockAmount(x.need,x.i)}${x.used>0?' · дома '+stockAmount(x.used,x.i):''}${x.buy>x.missing?' · останется '+stockAmount(x.after,x.i):''}</span><button class="linkbtn" data-package="${esc(x.key)}">${x.pack?'Изменить упаковку':'Упаковка'}</button></div></li>`;
+  const row=x=>`<li class="${S.shop.checked[x.name]?'done':''}${x.has?' has':''}"><button data-check="${esc(x.name)}" aria-pressed="${!!S.shop.checked[x.name]}" aria-label="${esc(x.name+': '+(S.shop.checked[x.name]?'убрать отметку':'отметить покупку'))}"><span class="nm">${esc(x.name)}</span><span class="am">${x.has?'Есть дома':stockAmount(x.buy,x.i)}</span><span class="pr">${x.buy===0?'':x.priceKnown?'≈ '+r0(x.price)+' ₽':'—'}</span></button></li>`;
   let body;
   if (S.shop.group) { const cats = {}; list.forEach(x => (cats[x.cat] = cats[x.cat] || []).push(x)); body = Object.keys(cats).sort().map(k => `<h4 class="cat">${k}</h4><ul class="shop">${cats[k].map(row).join('')}</ul>`).join(''); }
   else body = `<ul class="shop">${list.map(row).join('')}</ul>`;
-  v.innerHTML = `${appbar('Продукты', 'Список покупок')}${fridgeHtml()}
+  v.innerHTML = `${appbar('Продукты', 'Список покупок')}${fridgeHtml()}${storeHtml()}
   <div class="total"><div><span class="small">Примерно</span><b>${unknownPrices===list.length && list.length?'—':r0(total)+' ₽'}</b></div><div><span class="small">Бюджет</span><b>${r0(budgetPart)} ₽</b></div></div>
-  ${over ? `<div class="warn box">Перерасход ≈ ${r0((total - budgetPart) / 10) * 10} ₽. <button class="btn ghost sm" id="s-cheap">Удешевить 5 самых дорогих блюд</button></div>` : ''}
+  <button class="btn ghost wide price-review-btn" id="s-prices">${ic('analytics')}<span>Посмотреть цены${over?' · перерасход ≈ '+r0(total-budgetPart)+' ₽':''}</span>${ic('chev')}</button>
   ${unknownPrices?`<p class="hint">Не указана цена у ${unknownPrices} продуктов. Они не включены в сумму; цену упаковки можно задать в строке.</p>`:''}
   ${buyHead(sel)}
   <section class="shopping-progress" aria-label="Готовность списка покупок"><div><span>${ic('shop')} В корзине</span><b>${list.filter(x => S.shop.checked[x.name] || x.has).length}<small> / ${list.length}</small></b></div><progress max="${Math.max(1,list.length)}" value="${list.filter(x => S.shop.checked[x.name] || x.has).length}" aria-label="Продуктов отмечено"></progress><p>${list.some(x => x.has) ? 'Продукты дома уже учтены. ' : ''}Отмечайте покупки — список запомнит ваш прогресс.</p></section>
   ${split ? `<div class="seg">${ranges.map(([k, t]) => `<button class="${(S.shop.range || 'all') === k ? 'on' : ''}" data-range="${k}">${t}</button>`).join('')}</div>` : ''}
   <div class="actions two"><button class="btn ghost" id="s-group">${S.shop.group ? 'Без групп' : 'Сгруппировать'}</button><button class="btn ghost" id="s-share">Поделиться</button></div>
   ${body}
+  <details class="shopping-options"><summary>Настройки покупки</summary><button class="btn ghost wide" id="shop-package-settings">Фасовка и цены продуктов</button></details>
   <button class="btn primary wide big" id="s-copy">Скопировать список</button>
   <p class="hint purchase-note">После «Закуплено» нужная часть будет отложена на рацион, а лишнее из упаковок попадёт в холодильник.</p>
   <button class="btn ghost wide" id="s-bought">Закуплено · ${fmtDates(sel, true)}</button>
   ${undo}
   <p class="hint">Цены ориентировочные, по средним ценам сетевых магазинов. Отметьте продукты в списке, затем подтвердите закупку.</p>`;
   bindFridge();
-  v.querySelectorAll('[data-package]').forEach(b=>b.onclick=()=>packageSheet(list.find(x=>x.key===b.dataset.package).i));
+
   v.querySelectorAll('[data-range]').forEach(b => b.onclick = () => { S.shop.range = b.dataset.range; save(); render(); });
   v.querySelectorAll('[data-check]').forEach(b => b.onclick = () => {
     const k = b.dataset.check; S.shop.checked[k] = !S.shop.checked[k]; save();
@@ -1819,12 +1902,13 @@ function viewShop() {
     $('.shopping-progress progress').value = count;
 
   });
+  const packaging=$('#shop-package-settings');if(packaging)packaging.onclick=()=>sheet('<h2>Фасовка продуктов</h2><div class="rows">'+list.map((x,index)=>`<button class="row" data-pack-product="${index}"><span>${esc(x.name)}</span>${ic('chev')}</button>`).join('')+'</div>',body=>body.querySelectorAll('[data-pack-product]').forEach(b=>b.onclick=()=>packageSheet(list[+b.dataset.packProduct].i)));
   $('#s-group').onclick = () => { S.shop.group = !S.shop.group; save(); render(); };
   const text = () => 'Список покупок — Мой рацион\n' + list.filter(x => !x.has).map(x => `${S.shop.checked[x.name] ? '✓' : '•'} ${x.name} — ${x.amt}`).join('\n') + `\nИтого ≈ ${r0(total / 10) * 10} ₽`;
   const copy = async () => { try { await navigator.clipboard.writeText(text()); toast('Список скопирован'); } catch (e) { sheet(`<h3>Скопируйте текст</h3><textarea class="copybox" id="cb" readonly>${esc(text())}</textarea>`, b => { const t = $('#cb', b); t.focus(); t.select(); }); } };
   $('#s-copy').onclick = copy;
   $('#s-share').onclick = async () => { if (navigator.share) { try { await navigator.share({title: 'Список покупок', text: text()}); return; } catch (e) { if (e.name === 'AbortError') return; } } copy(); };
-  const ch = $('#s-cheap'); if (ch) ch.onclick = cheapen;
+  $('#s-prices').onclick=()=>{S.ui.tab='prices';save();render();};
   $('#s-bought').onclick=()=>{try{confirmShopping(sel);save();render();$('#scroller').scrollTop=0;toast('Покупка учтена. Остатки упаковок — в холодильнике.');}catch(error){toast(error.message);}};
   bindUndo();
 }
@@ -1853,7 +1937,7 @@ function viewSettings() {
     v.innerHTML = `${appbar('Настройки', 'Профиль и приложение', {back: true})}
     <button class="profile" data-person="${me.id}"><span class="mono">${esc(me.name.slice(0, 1).toUpperCase())}</span><span><b>${esc(me.name)}</b><small>${r0(t.E)} ккал · белок ${r0(t.P)} г в день</small></span>${ic('chev', 'sm')}</button>
     <nav class="rows">${SET_PAGES.map(([k, t, s]) => `<button class="row" data-set="${k}"><span class="medal">${ic(SET_IC[k])}</span><span><b>${t}</b><small>${s}</small></span>${ic('chev', 'sm')}</button>`).join('')}</nav>
-    <p class="hint center">Мой рацион · версия 0.17.0</p>`;
+    <p class="hint center">Мой рацион · версия 0.18.0</p>`;
     v.querySelectorAll('[data-set]').forEach(b => b.onclick = () => { S.ui.set = b.dataset.set; save(); render(); });
     v.querySelector('[data-person]').onclick = () => editPerson(me);
     return;
@@ -2078,7 +2162,7 @@ async function tasteTest(mode, onDone) {
   };
   sheet(`<p class="eyebrow" id="tt-eb"></p><h3>Нравится?</h3><p class="hint">Вправо — нравится, влево — не моё, вниз — никогда.</p>
    <div class="tt-stack" id="tt-stack"></div>
-   <div class="tt-btns"><button class="tt-btn tt-x" id="tt-no" aria-label="Не моё">✕</button><button class="tt-btn tt-h" id="tt-yes" aria-label="Нравится">♥</button></div>
+   <div class="tt-btns"><button class="tt-btn tt-x" id="tt-no" aria-label="Не моё">${fic('skip')}</button><button class="tt-btn tt-h" id="tt-yes" aria-label="Нравится">${ic('heart')}</button></div>
    <button class="tt-skip" id="tt-end">${ans.length ? 'Закончить' : 'Пропустить тест'}</button>`, el => {
     root = el; paint();
     $('#tt-no', el).onclick = () => answer(-1); $('#tt-yes', el).onclick = () => answer(1);
@@ -2169,7 +2253,7 @@ document.querySelectorAll('.tab').forEach(b => b.onclick = () => { S.ui.tab = b.
 document.addEventListener('click', e => {
   if (autoRun && (e.target.closest('[data-gear]') || e.target.closest('[data-back]'))) return;
   if (e.target.closest('[data-gear]')) { S.ui.prevTab = S.ui.tab; S.ui.tab = 'settings'; S.ui.set = null; save(); render(); }
-  else if (e.target.closest('[data-back]')) { if (S.ui.tab === 'fridge') { S.ui.tab = S.ui.fridgeReturn || 'shop'; save(); render(); return; } if (S.ui.set) S.ui.set = null; else S.ui.tab = S.ui.prevTab || 'plan'; save(); render(); }
+  else if (e.target.closest('[data-back]')) { if (S.ui.tab === 'prices') { S.ui.tab='shop';save();render();return; } if (S.ui.tab === 'fridge') { S.ui.tab = S.ui.fridgeReturn || 'shop'; save(); render(); return; } if (S.ui.set) S.ui.set = null; else S.ui.tab = S.ui.prevTab || 'plan'; save(); render(); }
 });
 document.addEventListener('input', e => { if (e.target.id !== 'pf-height' && e.target.id !== 'pf-weight') return;
   const g = $('#pf-goal'), o = g && g.querySelector('option[value="loss"]'); if (!o) return;
