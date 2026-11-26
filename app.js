@@ -848,6 +848,20 @@ function bindSurfaceLight() {
   header.onpointerleave = reset;
 }
 
+function preservePreparedCard(oldDeck,newDeck) {
+  const fresh=newDeck.querySelector('#card');if(!fresh)return;
+  const id=fresh.dataset.dishId,prepared=oldDeck.querySelector('.under');
+  const source=prepared?.dataset.previewId===id?prepared:oldDeck.querySelector('#card[data-dish-id]');
+  if(!source||((source.dataset.previewId||source.dataset.dishId)!==id))return;
+  const previousPhoto=source.querySelector('.feed-photo'),nextPhoto=fresh.querySelector('.feed-photo');
+  if(previousPhoto&&nextPhoto&&(previousPhoto.querySelector('img')?.getAttribute('src')||'')===(nextPhoto.querySelector('img')?.getAttribute('src')||''))nextPhoto.replaceWith(previousPhoto);
+  if(source===prepared){
+    source.replaceChildren(...fresh.childNodes);
+    for(const attr of [...source.attributes])source.removeAttribute(attr.name);
+    for(const attr of fresh.attributes)source.setAttribute(attr.name,attr.value);
+    fresh.replaceWith(source);
+  }
+}
 let lastView = '';
 function render() {
   applyTheme(); rollWeek();
@@ -859,7 +873,7 @@ function render() {
   $('#nav').hidden = false;
   const feeding = !!(S.feed && S.feed.active); document.body.classList.toggle('feeding', feeding);
   if (feeding) { const old = $('#feedwrap');
-    if (old) { const t = document.createElement('div'); t.innerHTML = viewFeed(); const nw = t.firstElementChild; ['.ftop', '.deck'].forEach(q => { const a = old.querySelector(q), b = nw.querySelector(q); if (a && b) a.replaceWith(b); }); }
+    if (old) { const t = document.createElement('div'); t.innerHTML = viewFeed(); const nw = t.firstElementChild; ['.ftop', '.deck'].forEach(q => { const a = old.querySelector(q), b = nw.querySelector(q); if (a && b) { if(q==='.deck')preservePreparedCard(a,b); a.replaceWith(b); } }); }
     else v.innerHTML = viewFeed();
     bindFeed(); $('#nav').hidden = true; return; }
   if (['settings','fridge','prices'].includes(S.ui.tab)) $('#nav').hidden = true;
@@ -1095,8 +1109,7 @@ function mealPage(day, i) { // блюдо — отдельное полноэк�
   const d = sl.dish, m = pattern()[i], ff = famFactor(d, i), n = nut(d, ff), ti = todayIdx();
   const dt = new Date(addDays(S.plan.start, day) + 'T12:00:00'), fs = slotFactor(d, i), tot = fs.reduce((a, b) => a + b, 0), base = nut(d);
   sheet(`<p class="eyebrow">${m[1]} · ${DOW[dt.getDay()]}, ${dt.getDate()} ${MON[dt.getMonth()]}${sl.status === 'eaten' ? ' · съедено' : sl.status === 'skipped' ? ' · пропущено' : ''}</p>
-   <h2 class="pg-title">${esc(d.name)}</h2>
-   ${dishVisual(d, 'recipe-photo')}
+   <section class="recipe-hero">${dishVisual(d, 'recipe-photo')}<h2 class="pg-title">${esc(d.name)}</h2></section>
    <div class="grid4"><div><b>${r0(n.kcal)}</b><span>ккал</span></div><div><b>${r0(n.p)}</b><span>белки, г</span></div><div><b>${r0(n.f)}</b><span>жиры, г</span></div><div><b>${r0(n.c)}</b><span>углеводы, г</span></div></div>
    <div class="facts"><div><em>Готовка</em><b>${d.time} мин</b></div><div><em>Стоимость</em><b>≈ ${r0(famCost(d) / 10) * 10} ₽</b></div></div>
    ${S.marks.notes[d.id] ? `<p class="note">${ic('heart', 'sm')} ${esc(S.marks.notes[d.id])}</p>` : ''}
@@ -1563,7 +1576,7 @@ function cardHtml(d, m, slot, under, collapsed=false) { // under — следу�
       .replace(/(<article[^>]*>)/,'$1'+neutralSlots).replace('</article>',feedActionsHtml(!!S.feed?.accessPending)+'</article>')
       .replace(/ id="[^"]*"/g,'').replace(/ aria-controls="[^"]*"/g,'').replace(/ tabindex="[^"]*"/g,'');
   }
-  return `<article class="dcard${expanded ? ' details-open' : ''}" id="card" tabindex="0" aria-label="${esc(d.name)}">
+  return `<article class="dcard${expanded ? ' details-open' : ''}" id="card" data-dish-id="${esc(d.id)}" tabindex="0" aria-label="${esc(d.name)}">
    <span class="stamp st-take">Взять</span><span class="stamp st-skip">Пропуск</span><span class="stamp st-mark">Пометка</span><span class="stamp st-close">Свернуть</span>
    <div class="dc-content" tabindex="0" role="region" aria-label="Сведения о блюде"><div class="dc-hero">${dishVisual(d, 'feed-photo')}
     <div class="dc-head"><h3 class="cname">${esc(d.name)}</h3></div></div>
@@ -1946,7 +1959,7 @@ function viewSettings() {
     v.innerHTML = `${appbar('Настройки', 'Профиль и приложение', {back: true})}
     <button class="profile" data-person="${me.id}"><span class="mono">${esc(me.name.slice(0, 1).toUpperCase())}</span><span><b>${esc(me.name)}</b><small>${r0(t.E)} ккал · белок ${r0(t.P)} г в день</small></span>${ic('chev', 'sm')}</button>
     <nav class="rows">${SET_PAGES.map(([k, t, s]) => `<button class="row" data-set="${k}"><span class="medal">${ic(SET_IC[k])}</span><span><b>${t}</b><small>${s}</small></span>${ic('chev', 'sm')}</button>`).join('')}</nav>
-    <p class="hint center">Мой рацион · версия 0.19.0</p>`;
+    <p class="hint center">Мой рацион · версия 0.19.1</p>`;
     v.querySelectorAll('[data-set]').forEach(b => b.onclick = () => { openSettingsPage(b.dataset.set); });
     v.querySelector('[data-person]').onclick = () => editPerson(me);
     return;
@@ -2266,7 +2279,7 @@ function viewPersonSettings() {
   const p=S.people.find(p=>p.id===S.ui.personId)||null,v=$('#view');
   if(!p&&S.ui.personId!=='new'){S.ui.set='family';save();viewSettings();return;}
   v.innerHTML=`${appbar(p?p.name:'Новый человек','Семья',{back:true})}<section class="person-editor">${personForm(p||{sex:'f',age:30,height:165,weight:60})}
-   ${p?`<button class="person-life-link" id="pp-life"><span class="medal">${ic('leaf')}</span><span><b>Образ жизни</b><small>Работа, тренировки и цель</small></span>${ic('chev')}</button>`:''}
+   ${`<button class="person-life-link" id="pp-life"><span class="medal">${ic('leaf')}</span><span><b>Образ жизни</b><small>Работа, тренировки и цель</small></span>${ic('chev')}</button>`}
    <div class="actions two">${p&&S.people.length>1?'<button class="btn ghost danger" id="pp-del">Удалить</button>':'<span></span>'}<button class="btn primary" id="pp-save">Сохранить</button></div></section>`;
   const commit=()=>{const np=readPersonMerged(p);if(!np)return null;if(p)S.people[S.people.findIndex(x=>x.id===p.id)]=np;else S.people.push(np);S.ui.personId=np.id;save();return np;};
   $('#pp-save').onclick=()=>{if(commit()){toast('Сохранено');settingsBack();}};
