@@ -542,7 +542,7 @@ function cachedCandidate(ctx,exclude=null,recycle=false) {
 function readyPeek(peek,ctx) {
   if(!peek || peek.day!==ctx.day || peek.slot!==ctx.slot)return null;
   const d=getDish(peek.id);const checked=peek.recycle?{...ctx,seen:new Set([...ctx.seen].filter(id=>id!==peek.id))}:ctx;if(!d || !fitsSlot(d,checked,'repeat'))return null;
-  if(Server.on())poolTake(d.id,ctx);return d;
+  if(Server.on()){const P=poolState(),q=P.q[ctx.type]||[];if(q.includes(d.id)){const before=poolSize(P);P.q[ctx.type]=q.filter(id=>id!==d.id);poolLow(P,before);}}return d;
 }
 function peekNext(cur) {
   const F=S.feed;if(!F?.active)return;
@@ -715,7 +715,7 @@ function poolWant(P) { // сколько добрать по приёмам; п�
 function poolReq(P, want) { // блюда «вообще»: нормы главного едока без учёта съеденного, бюджет на всю неделю
   const st = S.settings, pat = pattern(), left = {}, shares = {}, days = S.plan ? S.plan.len : S.settings.planLen || 7;
   pat.forEach(m => { left[m[0]] = (left[m[0]] || 0) + days; shares[m[0]] = m[2] / 100; });
-  const ex = new Set([...Object.values(P.q).flat(), ...allSlots().map(sl => sl.dish.id), ...S.banned.ids]);
+  const ex = new Set([...Object.values(P.q).flat(), ...allSlots().map(sl => sl.dish.id), ...S.banned.ids, ...Object.values(S.feed?.seen||{}).flat()]);
   const r = {want, sections: secs(), eater: eaterReq(-1, -1), deficits: [], meal_shares: shares,
     budget_left: Math.max(0, r0(baseBudget())), meals_left: left, meals_per_day: pat.length, allergies: st.allergens || [], diet: DIET_API[st.diet] || 'all',
     forbid: st.forbidden, exclude: [...ex].filter(id => !DBMAP[id]).slice(-300), other_cuisines: !!S.collect.otherCuisines};
@@ -873,15 +873,16 @@ function personForm(p = {}) {
   return `<div class="form">
   <label>Имя<input id="pf-name" value="${esc(p.name || '')}" placeholder="Например, Ярослав"></label>
   <div class="row2"><label>Пол<select id="pf-sex"><option value="m"${p.sex === 'm' ? ' selected' : ''}>Мужской</option><option value="f"${p.sex === 'f' ? ' selected' : ''}>Женский</option></select></label>
-  <label>Возраст<input id="pf-age" type="number" inputmode="numeric" min="18" max="100" value="${p.age || 30}"></label></div>
-  <div class="row2"><label>Рост, см<input id="pf-height" type="number" inputmode="numeric" min="130" max="230" value="${p.height || 175}"></label>
-  <label>Вес, кг<input id="pf-weight" type="number" inputmode="decimal" min="35" max="250" value="${p.weight || 75}"></label></div>
-  <p class="hint">Приложение рассчитано на взрослых 18+. Детские нормы появятся позже.</p></div>`;
+  <label>Возраст<input id="pf-age" type="number" inputmode="numeric" min="1" max="100" value="${p.age || 30}"></label></div>
+  <div class="row2"><label>Рост, см<input id="pf-height" type="number" inputmode="numeric" min="20" max="230" value="${p.height || 175}"></label>
+  <label>Вес, кг<input id="pf-weight" type="number" inputmode="decimal" min="1" max="250" value="${p.weight || 75}"></label></div>
+  </div>`;
 }
 function readPerson(id) {
   const age = +$('#pf-age').value;
   if (!$('#pf-name').value.trim()) { toast('Введите имя'); return null; }
-  if (age < 18) { toast('Пока поддерживаются только взрослые 18+'); return null; }
+  if (!Number.isInteger(age) || age < 1 || age > 100) { toast('Укажите возраст от 1 до 100 лет'); return null; }
+  if (!(+$('#pf-height').value>=20 && +$('#pf-height').value<=230 && +$('#pf-weight').value>=1 && +$('#pf-weight').value<=250)) { toast('Проверьте рост и вес'); return null; }
   return {id: id || 'p' + Date.now(), name: $('#pf-name').value.trim(), sex: $('#pf-sex').value, age, height: +$('#pf-height').value, weight: +$('#pf-weight').value, wAt: Date.now()};
 }
 const NEW_LIFE = {work: 'sit', trN: 0, trMin: 45, sport: 'light', goal: 'keep'};
@@ -1035,7 +1036,7 @@ function viewPlan() {
 }
 function weightCard() { // раз в 2 недели: «Обновите вес» — сразу для всей семьи
   if (!S.people.some(p => Date.now() - (p.wAt || 0) > WEIGHT_ASK) || (S.ui.wLater || 0) > Date.now()) return '';
-  return `<section class="panel note" id="wcard"><p class="eyebrow">Обновите вес</p>${S.people.map(p => `<label class="field"><span><em>${esc(p.name)}, кг</em><input type="number" inputmode="decimal" min="35" max="250" step="0.1" data-w="${p.id}" value="${p.weight}"></span></label>`).join('')}
+  return `<section class="panel note" id="wcard"><p class="eyebrow">Обновите вес</p>${S.people.map(p => `<label class="field"><span><em>${esc(p.name)}, кг</em><input type="number" inputmode="decimal" min="1" max="250" step="0.1" data-w="${p.id}" value="${p.weight}"></span></label>`).join('')}
    <div class="actions two"><button class="btn ghost" id="w-later">Позже</button><button class="btn primary" id="w-save">Сохранить</button></div></section>`;
 }
 function b12Card() { // единственная пометка о питании: веганам и вегетарианцам — раз в неделю
@@ -1552,12 +1553,16 @@ function prepareFeedBackground(F) {
 /* ---------- Лента карточек (как в знакомствах) ---------- */
 const FIC = {"take":"<path d=\"M20 6 9 17l-5-5\" />","skip":"<path d=\"M18 6 6 18\" /><path d=\"m6 6 12 12\" />","dis":"<path d=\"M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88Z\" /><path d=\"M17 14V2\" />","mark":"<path d=\"M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7\" /><path d=\"M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z\" />"};
 const fic = n => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${FIC[n]}</svg>`;
-function cardHtml(d, m, slot, under) { // under — следующая карточка, лежит под текущей (без кнопок и жестов)
-  const ff = famFactor(d, slot), n = nut(d, ff), expanded = !under && S.feed?.detailsId === d.id;
+function cardHtml(d, m, slot, under, collapsed=false) { // under — следующая карточка, лежит под текущей (без кнопок и жестов)
+  const ff = famFactor(d, slot), n = nut(d, ff), expanded = !under && !collapsed && S.feed?.detailsId === d.id;
   const ing = d.ing.map(x => `<li><span>${esc(x.name)}</span><i></i><b>${fmtAmt(x, x.g * ff)}</b></li>`).join('');
-  if (under) return `<article class="dcard under" aria-hidden="true" data-preview-id="${esc(d.id)}"><div class="dc-hero">${dishVisual(d, 'feed-photo')}
-    <div class="dc-head"><h3 class="cname">${esc(d.name)}</h3></div></div>
-   <div class="dc-body"><div class="grid4 kb"><div><b>${r0(n.kcal)}</b><span>ккал</span></div><div><b>${r0(n.p)}</b><span>белки, г</span></div><div><b>${r0(n.f)}</b><span>жиры, г</span></div><div><b>${r0(n.c)}</b><span>углев., г</span></div></div></div></article>`;
+  if (under) {
+    const markup=cardHtml(d,m,slot,false,true);
+    const neutralSlots=`<div class="slots">${pattern().map(x=>`<span class="slot">${x[1]}</span>`).join('')}</div>`;
+    return markup.replace('class="dcard','aria-hidden="true" inert data-preview-id="'+esc(d.id)+'" class="dcard under')
+      .replace(/(<article[^>]*>)/,'$1'+neutralSlots).replace('</article>',feedActionsHtml(!!S.feed?.accessPending)+'</article>')
+      .replace(/ id="[^"]*"/g,'').replace(/ aria-controls="[^"]*"/g,'').replace(/ tabindex="[^"]*"/g,'');
+  }
   return `<article class="dcard${expanded ? ' details-open' : ''}" id="card" tabindex="0" aria-label="${esc(d.name)}">
    <span class="stamp st-take">Взять</span><span class="stamp st-skip">Пропуск</span><span class="stamp st-mark">Пометка</span><span class="stamp st-close">Свернуть</span>
    <div class="dc-content" tabindex="0" role="region" aria-label="Сведения о блюде"><div class="dc-hero">${dishVisual(d, 'feed-photo')}
@@ -1570,6 +1575,15 @@ function cardHtml(d, m, slot, under) { // under — следующая карт�
      ${stepsOf(d).length ? `<p class="ingh">Как готовить</p><ol class="csteps">${stepsOf(d).map(t => `<li>${esc(t)}</li>`).join('')}</ol>` : ''}</div>
    </div></div></article>`;
 }
+function feedActionsHtml(pending=false) {
+  return `<footer class="dc-footer"><div class="fbtns">
+    <button class="fb fb-skip" id="f-skip" aria-label="Пропустить">${fic('skip')}<span>Пропуск</span></button>
+    <button class="fb fb-dis" id="f-dis" aria-label="Не нравится">${fic('dis')}<span>Не нравится</span></button>
+    <button class="fb fb-mark" id="f-mark" aria-label="Пометка">${fic('mark')}<span>Пометка</span></button>
+    <button class="fb fb-take" id="f-take" aria-label="Взять">${fic('take')}<span>Взять</span></button>
+   </div>
+   ${pending ? '<p class="feed-access-status" role="status">Проверяем доступ</p>' : ''}<p class="gest"><span>← пропуск</span><span>взять →</span><span>Подробнее — «Читать полностью»</span></p></footer>`;
+}
 function viewFeed() {
   const F = S.feed, pat = pattern(), m = pat[F.slot];
   const dt = new Date(addDays(S.plan.start, F.day) + 'T12:00:00'), taken = S.plan.days[F.day].slots;
@@ -1581,13 +1595,7 @@ function viewFeed() {
   if (!card.includes('id="card"')) card = card.replace(/(<article[^>]*>)/, '$1<div class="dc-content">').replace('</article>', '</div></article>');
   const pd = !F.loading && F.card && (F.peek||F.takePeek) ? getDish((F.peek||F.takePeek).id) : null, under = pd ? cardHtml(pd, pat[(F.peek||F.takePeek).slot], (F.peek||F.takePeek).slot, true) : '<div class="ghostcard g1"></div>';
   const slots = `<div class="slots">${pat.map((x, i) => `<button class="slot${i === F.slot ? ' on' : ''}${taken[i] ? ' done' : ''}" data-slot="${i}">${x[1]}</button>`).join('')}</div>`;
-  const actions = `<footer class="dc-footer"><div class="fbtns">
-    <button class="fb fb-skip" id="f-skip" aria-label="Пропустить">${fic('skip')}<span>Пропуск</span></button>
-    <button class="fb fb-dis" id="f-dis" aria-label="Не нравится">${fic('dis')}<span>Не нравится</span></button>
-    <button class="fb fb-mark" id="f-mark" aria-label="Пометка">${fic('mark')}<span>Пометка</span></button>
-    <button class="fb fb-take" id="f-take" aria-label="Взять">${fic('take')}<span>Взять</span></button>
-   </div>
-   ${F.accessPending ? '<p class="feed-access-status" role="status">Проверяем доступ</p>' : ''}<p class="gest"><span>← пропуск</span><span>взять →</span><span>Подробнее — «Читать полностью»</span></p></footer>`;
+  const actions = feedActionsHtml(F.accessPending);
   return `<section class="feedwrap" id="feedwrap"><div class="feed">
    <header class="ftop"><button class="iconbtn" id="f-close" aria-label="Свернуть подбор">${ic('down')}</button><div class="fday"><button class="arrow" id="f-prev" aria-label="Предыдущий день">‹</button><span>${DOW[dt.getDay()]}, ${dt.getDate()} ${MON[dt.getMonth()]}</span><button class="arrow" id="f-next" aria-label="Следующий день">›</button></div><span class="fcount">${done}<small>/${total}</small></span></header>
    <div class="deck" id="deck"><div class="ghostcard g2"></div>${under}${card.replace(/(<article[^>]*>)/, '$1' + slots).replace('</article>', actions + '</article>')}</div>
@@ -1811,8 +1819,12 @@ function storeIngredient(i) {
   return Number.isFinite(value)&&value>=0?{...i,price:value,storePriceKnown:true}:i;
 }
 function storeHtml() {
-  const store=selectedPriceStore(),prices=S.priceSources.prices[S.priceSources.selected]||{};
-  return `<section class="store-selector"><label for="shop-store">Магазин</label><select id="shop-store"><option value="catalog">Базовые цены</option>${S.priceSources.stores.map(x=>`<option value="${esc(x.id)}"${x.id===S.priceSources.selected?' selected':''}>${esc(x.name)}</option>`).join('')}<option value="__new">Добавить магазин…</option></select>${store?`<p class="hint">${Object.keys(prices).length?'Расчёт с доступными ценами магазина; остальные — из каталога.':'Цены этого магазина ещё не подключены. Пока используется базовый каталог.'}</p>`:''}</section>`;
+  const store=selectedPriceStore(),hasPrices=Object.keys(S.priceSources.prices[S.priceSources.selected]||{}).length;
+  return `<div class="store-selector"><label for="shop-store">Магазин</label><select id="shop-store" aria-label="Магазин${store&&!hasPrices?' — пока базовые цены':''}"><option value="catalog">Базовые цены</option>${S.priceSources.stores.map(x=>`<option value="${esc(x.id)}"${x.id===S.priceSources.selected?' selected':''}>${esc(x.name)}</option>`).join('')}<option value="__new">Добавить магазин…</option></select></div>`;
+}
+function shopTools(total=0,budget=0) {
+  const over=budget>0&&total>budget;
+  return `<div class="shop-tools">${storeHtml()}<button class="btn ghost price-review-btn" id="s-prices">${ic('analytics')}<span>Посмотреть цены${over?`<small>Перерасход ≈ ${r0(total-budget)} ₽</small>`:''}</span>${ic('chev')}</button></div>`;
 }
 function bindStore() {
   const select=$('#shop-store');if(!select)return;
@@ -1862,10 +1874,10 @@ function viewShop() {
   const undoable=S.shop.lastBought && S.shop.lastBought.some(k=>S.shop.bought[k]) && (!S.shop.receiptId || RacionPantry.canUndo(S.fridge,S.shop.receiptId));
   const undo=undoable?'<p class="buyundo">Закупка подтверждена. <button class="linkbtn" id="s-undo">Отменить закупку</button></p>':'';
   const bindUndo=()=>{const u=$('#s-undo');if(u)u.onclick=()=>{try{undoShopping();save();render();}catch(error){toast(error.message);}};};
-  if (!S.plan || !S.plan.days.some(d => d.slots.some(Boolean))) { v.innerHTML = `${appbar('Продукты', 'Список покупок')}${fridgeHtml()}${storeHtml()}<button class="btn ghost wide price-review-btn" id="s-prices">${ic('analytics')} Посмотреть цены ${ic('chev')}</button><section class="buycard"><h2 class="gt">Закупка пока не собрана</h2><p class="buysub">Соберите рацион — здесь появится список продуктов на собранные дни</p><button class="btn primary" id="s-go">Собрать рацион</button></section>`; $('#s-go').onclick = goCollect; bindFridge(); return; }
+  if (!S.plan || !S.plan.days.some(d => d.slots.some(Boolean))) { v.innerHTML = `${appbar('Продукты', 'Список покупок')}${fridgeHtml()}${shopTools()}<section class="buycard"><h2 class="gt">Закупка пока не собрана</h2><p class="buysub">Соберите рацион — здесь появится список продуктов на собранные дни</p><button class="btn primary" id="s-go">Собрать рацион</button></section>`; $('#s-go').onclick = goCollect; bindFridge(); return; }
   const {pend, split, sel} = shopDays();
   if (!pend.length) { const bd = S.plan.days.map((d, i) => i).filter(i => S.shop.bought[dayDate(i)]);
-    v.innerHTML = `${appbar('Продукты', 'Список покупок')}${fridgeHtml()}${storeHtml()}<button class="btn ghost wide price-review-btn" id="s-prices">${ic('analytics')} Посмотреть цены ${ic('chev')}</button><section class="buycard"><h2 class="gt">${bd.length?'Всё собранное закуплено':'Нет продуктов к покупке'}</h2><p class="buysub">${bd.length ? `Закуплено: ${fmtDates(bd)}. ` : ''}Соберите следующие дни — список появится здесь</p><button class="btn primary" id="s-go">Собрать рацион</button></section>${undo}`;
+    v.innerHTML = `${appbar('Продукты', 'Список покупок')}${fridgeHtml()}${shopTools()}<section class="buycard"><h2 class="gt">${bd.length?'Всё собранное закуплено':'Нет продуктов к покупке'}</h2><p class="buysub">${bd.length ? `Закуплено: ${fmtDates(bd)}. ` : ''}Соберите следующие дни — список появится здесь</p><button class="btn primary" id="s-go">Собрать рацион</button></section>${undo}`;
     $('#s-go').onclick = goCollect; bindUndo(); bindFridge(); return; }
   const list=shopList(sel), total=list.reduce((sum,row)=>sum+row.price,0), unknownPrices=list.filter(row=>!row.priceKnown).length, budget=+S.collect.budget||0;
   const budgetPart = budget * sel.length / S.plan.len;
@@ -1875,12 +1887,10 @@ function viewShop() {
   let body;
   if (S.shop.group) { const cats = {}; list.forEach(x => (cats[x.cat] = cats[x.cat] || []).push(x)); body = Object.keys(cats).sort().map(k => `<h4 class="cat">${k}</h4><ul class="shop">${cats[k].map(row).join('')}</ul>`).join(''); }
   else body = `<ul class="shop">${list.map(row).join('')}</ul>`;
-  v.innerHTML = `${appbar('Продукты', 'Список покупок')}${fridgeHtml()}${storeHtml()}
-  <div class="total"><div><span class="small">Примерно</span><b>${unknownPrices===list.length && list.length?'—':r0(total)+' ₽'}</b></div><div><span class="small">Бюджет</span><b>${r0(budgetPart)} ₽</b></div></div>
-  <button class="btn ghost wide price-review-btn" id="s-prices">${ic('analytics')}<span>Посмотреть цены${over?' · перерасход ≈ '+r0(total-budgetPart)+' ₽':''}</span>${ic('chev')}</button>
-  ${unknownPrices?`<p class="hint">Не указана цена у ${unknownPrices} продуктов. Они не включены в сумму; цену упаковки можно задать в строке.</p>`:''}
+  v.innerHTML = `<section class="shopping-progress" aria-label="Готовность списка покупок"><progress max="${Math.max(1,list.length)}" value="${list.filter(x=>S.shop.checked[x.name]||x.has).length}" aria-label="Продуктов отмечено"></progress></section>${appbar('Продукты', 'Список покупок')}${fridgeHtml()}${shopTools(total,budgetPart)}
   ${buyHead(sel)}
-  <section class="shopping-progress" aria-label="Готовность списка покупок"><div><span>${ic('shop')} В корзине</span><b>${list.filter(x => S.shop.checked[x.name] || x.has).length}<small> / ${list.length}</small></b></div><progress max="${Math.max(1,list.length)}" value="${list.filter(x => S.shop.checked[x.name] || x.has).length}" aria-label="Продуктов отмечено"></progress><p>${list.some(x => x.has) ? 'Продукты дома уже учтены. ' : ''}Отмечайте покупки — список запомнит ваш прогресс.</p></section>
+  <div class="total"><div><span class="small">Примерно</span><b>${unknownPrices===list.length && list.length?'—':r0(total)+' ₽'}</b></div><div><span class="small">Бюджет</span><b>${r0(budgetPart)} ₽</b></div></div>
+  ${unknownPrices?`<p class="hint">Цена не указана у ${unknownPrices} продуктов. Её можно добавить в настройках покупки.</p>`:''}
   ${split ? `<div class="seg">${ranges.map(([k, t]) => `<button class="${(S.shop.range || 'all') === k ? 'on' : ''}" data-range="${k}">${t}</button>`).join('')}</div>` : ''}
   <div class="actions two"><button class="btn ghost" id="s-group">${S.shop.group ? 'Без групп' : 'Сгруппировать'}</button><button class="btn ghost" id="s-share">Поделиться</button></div>
   ${body}
@@ -1898,7 +1908,6 @@ function viewShop() {
     b.closest('li').classList.toggle('done', S.shop.checked[k]); b.setAttribute('aria-pressed', String(!!S.shop.checked[k]));
     b.setAttribute('aria-label', k + ': ' + (S.shop.checked[k] ? 'убрать отметку' : 'отметить купленным'));
     const count = list.filter(x => S.shop.checked[x.name] || x.has).length;
-    $('.shopping-progress b').innerHTML = count + '<small> / ' + list.length + '</small>';
     $('.shopping-progress progress').value = count;
 
   });
@@ -1937,15 +1946,17 @@ function viewSettings() {
     v.innerHTML = `${appbar('Настройки', 'Профиль и приложение', {back: true})}
     <button class="profile" data-person="${me.id}"><span class="mono">${esc(me.name.slice(0, 1).toUpperCase())}</span><span><b>${esc(me.name)}</b><small>${r0(t.E)} ккал · белок ${r0(t.P)} г в день</small></span>${ic('chev', 'sm')}</button>
     <nav class="rows">${SET_PAGES.map(([k, t, s]) => `<button class="row" data-set="${k}"><span class="medal">${ic(SET_IC[k])}</span><span><b>${t}</b><small>${s}</small></span>${ic('chev', 'sm')}</button>`).join('')}</nav>
-    <p class="hint center">Мой рацион · версия 0.18.0</p>`;
-    v.querySelectorAll('[data-set]').forEach(b => b.onclick = () => { S.ui.set = b.dataset.set; save(); render(); });
+    <p class="hint center">Мой рацион · версия 0.19.0</p>`;
+    v.querySelectorAll('[data-set]').forEach(b => b.onclick = () => { openSettingsPage(b.dataset.set); });
     v.querySelector('[data-person]').onclick = () => editPerson(me);
     return;
   }
-  const title = SET_PAGES.find(x => x[0] === pg)[1];
+  if(pg==='person'){viewPersonSettings();return;}
+  if(pg==='life-person'){viewLifePerson();return;}
+  const title = SET_PAGES.find(x => x[0] === pg)?.[1] || 'Настройки';
   const meds = [['kidney','Болезни почек'],['diabetes','Диабет на инсулине или сульфонилмочевине'],['ed','Расстройство пищевого поведения'],['preg','Беременность или кормление'],['warfarin','Приём варфарина'],['gi','Целиакия, подагра, тяжёлые болезни печени или ЖКТ']];
   let body = '';
-  if (pg === 'look') body = `<h4>Тема</h4><div class="themes">${[['garden','Изумруд','Сукно, фарфор и мягкое сияние'],['light','Светлая','Крем, олива, коралл'],['dark','Тёмная','Графит и золото'],['system','Как в системе','Меняется сама']].map(([k, t, s]) => `<button class="theme-card t-${k}${S.theme === k ? ' on' : ''}" data-theme-set="${k}"><i></i><b>${t}</b><small>${s}</small></button>`).join('')}</div>
+  if (pg === 'look') body = `<h4>Тема</h4><div class="themes">${[['garden','Изумруд','Сукно, фарфор и мягкое сияние']].map(([k, t, s]) => `<button class="theme-card t-${k}${S.theme === k ? ' on' : ''}" data-theme-set="${k}"><i></i><b>${t}</b><small>${s}</small></button>`).join('')}</div>
     ${S.theme === 'garden' ? '<p class="hint">Глубокая зелень, молочные поверхности и тёплые световые кромки. Многослойные материалы, объёмные кнопки и мягкие движения.</p>' : `<h4>Акцент</h4><div class="accents">${[['gold','Классическое золото'],['champagne','Шампань'],['rose','Розовое золото']].map(([k, t]) => `<button class="accent a-${k}${(S.accent || 'gold') === k ? ' on' : ''}" data-accent="${k}"><i></i><span>${t}</span></button>`).join('')}</div>`}`;
   if (pg === 'family') body = `<ul class="people">${S.people.map(p => { const t = personTargets(p); return `<li><button data-person="${p.id}"><span class="mono">${esc(p.name.slice(0, 1).toUpperCase())}</span><span><b>${esc(p.name)}</b><small>${p.sex === 'm' ? 'М' : 'Ж'}, ${p.age} лет, ${p.weight} кг · ${r0(t.E)} ккал, белок ${r0(t.P)} г</small></span>${ic('chev', 'sm')}</button></li>`; }).join('')}</ul>
     ${S.people.length < 10 ? '<button class="btn ghost wide" id="st-add">Добавить человека</button>' : '<p class="hint">Максимум 10 человек.</p>'}
@@ -1956,7 +1967,7 @@ function viewSettings() {
     <label class="field"><span><em>Тип питания</em><select id="st-diet">${[['all','Обычное'],['nopork','Без свинины'],['pesc','Без мяса, с рыбой'],['veg','Вегетарианское'],['vegan','Веганское']].map(([k, t]) => `<option value="${k}"${st.diet === k ? ' selected' : ''}>${t}</option>`).join('')}</select></span></label>
     <div class="field col"><em>Запрещённые продукты для всей семьи</em><div class="chipin"><input id="st-forb" placeholder="Например, грибы"><button class="btn ghost sm" id="st-forb-add">Добавить</button></div>${st.forbidden.length ? `<div class="chips">${st.forbidden.map((w, i) => `<button class="chip x" data-rmforb="${i}">${esc(w)}</button>`).join('')}</div>` : ''}</div></div>
     <h4>Аллергии в семье</h4><p class="hint">Отмеченное убирается из блюд у всех членов семьи.</p><div class="panel">${ALLERGENS.map(([k, t]) => `<label class="field check"><input type="checkbox" data-alg="${k}"${(st.allergens || []).includes(k) ? ' checked' : ''}><span>${t}</span></label>`).join('')}</div>`;
-  if (pg === 'life') body = lifeHtml(S.people);
+  if (pg === 'life') body = `<div class="life-people">${S.people.map(p=>`<button class="person-tile" data-life-person="${esc(p.id)}"><span class="mono">${esc(p.name.slice(0,1).toUpperCase())}</span><span><b>${esc(p.name)}</b><small>Работа, тренировки и цель</small></span>${ic('chev')}</button>`).join('')}</div>`;
   if (pg === 'tastes') body = tastesHtml();
   if (pg === 'health') body = `<div class="alert">${ic('shield')}<div><b>Важно</b><p>Приложение опирается на официальные нормы питания и подробный научный отчёт, но не заменяет врача и не гарантирует результат. При состояниях из списка ниже им лучше не пользоваться — посоветуйтесь с врачом или диетологом.</p></div></div>
     <h4>Состояния</h4><div class="panel">${meds.map(([k, t]) => `<label class="field check"><input type="checkbox" data-med="${k}"${st.medical[k] ? ' checked' : ''}><span>${t}</span></label>`).join('')}</div>
@@ -1977,7 +1988,7 @@ function viewSettings() {
   }
   if (pg === 'data') body = `<p class="hint">Все данные хранятся только на этом устройстве.</p><button class="btn ghost wide danger" id="st-wipe">Удалить все данные</button>`;
   v.innerHTML = `${appbar(title, 'Настройки', {back: true})}${body}`;
-  if (pg === 'life') bindLife(v, () => { const sc = $('#scroller'), y = sc ? sc.scrollTop : 0; render(); const sc2 = $('#scroller'); if (sc2) sc2.scrollTop = y; });
+  v.querySelectorAll('[data-life-person]').forEach(b=>b.onclick=()=>openSettingsPage('life-person',{personId:b.dataset.lifePerson,lifeReturn:'life'}));
   v.querySelectorAll('[data-theme-set]').forEach(b => b.onclick = () => { S.theme = b.dataset.themeSet; save(); render(); });
   v.querySelectorAll('[data-accent]').forEach(b => b.onclick = () => { S.accent = b.dataset.accent; save(); render(); });
   v.querySelectorAll('[data-person]').forEach(b => b.onclick = () => editPerson(S.people.find(p => p.id === b.dataset.person)));
@@ -2234,12 +2245,43 @@ function planShapeChanged() {
     sheet(`<h3>Изменить структуру рациона?</h3><p>Новое число приёмов или длина рациона применятся к следующему сбору. Начать текущий рацион заново сейчас?</p><div class="actions two"><button class="btn ghost" id="ps-no">Позже</button><button class="btn primary" id="ps-yes">Начать заново</button></div>`, b => { $('#ps-no', b).onclick = () => { closeSheet(); render(); }; $('#ps-yes', b).onclick = () => { S.plan = null; S.feed = null; save(); closeSheet(); render(); }; });
   else { if (S.plan && !S.plan.days.some(d => d.slots.some(Boolean))) S.plan = null; save(); render(); }
 }
-function editPerson(p) {
-  sheet(`<h3>${p ? 'Изменить' : 'Новый человек'}</h3>${personForm(p || {sex: 'f', age: 30, height: 165, weight: 60})}
-   <div class="actions two">${p && S.people.length > 1 ? '<button class="btn ghost danger" id="pp-del">Удалить</button>' : '<span></span>'}<button class="btn primary" id="pp-save">Сохранить</button></div>`, b => {
-    $('#pp-save', b).onclick = () => { const np = readPersonMerged(p); if (!np) return; if (p) S.people[S.people.findIndex(x => x.id === p.id)] = np; else { S.people.push(np); S.ui.tab = 'settings'; S.ui.set = 'life'; } save(); closeSheet(); render();
-      if (!p) sheet(`<p class="eyebrow">Новый человек в семье</p><h3>Пройти тест вкусов?</h3><p class="hint">Ответы ${esc(np.name)} добавятся к общему профилю семьи.</p><div class="actions"><button class="btn primary" id="nt-self">Пройти самостоятельно</button><button class="btn ghost" id="nt-fam">Пройти с семьёй</button><button class="btn ghost" id="nt-later">Позже</button></div>`, bb => { $('#nt-self', bb).onclick = () => tasteTest('self'); $('#nt-fam', bb).onclick = () => tasteTest('family'); $('#nt-later', bb).onclick = closeSheet; }); };
-    const del = $('#pp-del', b); if (del) del.onclick = () => { S.people = S.people.filter(x => x.id !== p.id); save(); closeSheet(); render(); };
+function settingsLocation() {return {tab:S.ui.tab,set:S.ui.set||null,personId:S.ui.personId||null,lifeReturn:S.ui.lifeReturn||null,personReturn:S.ui.personReturn||null,prevTab:S.ui.prevTab||'plan'};}
+function openSettingsPage(page,extra={}) {
+  if(typeof history!=='undefined')history.replaceState({...history.state,racionRoute:settingsLocation()},'');
+  S.ui.tab='settings';S.ui.set=page;Object.assign(S.ui,extra);save();
+  if(typeof history!=='undefined')history.pushState({racionRoute:settingsLocation(),settingsParent:true},'');
+  render();const sc=$('#scroller');if(sc)sc.scrollTop=0;focusSettingsHeading();
+}
+function focusSettingsHeading(){const heading=$('#view .appbar h1');if(heading){heading.tabIndex=-1;heading.focus({preventScroll:true});}}
+function settingsBack() {
+  if(typeof history!=='undefined'&&history.state?.settingsParent){history.back();return;}
+  if(S.ui.set==='life-person')S.ui.set=S.ui.lifeReturn||'life';
+  else if(S.ui.set==='person')S.ui.set=S.ui.personReturn==='root'?null:(S.ui.personReturn||'family');
+  else if(S.ui.set)S.ui.set=null;
+  else S.ui.tab=S.ui.prevTab||'plan';
+  save();render();focusSettingsHeading();
+}
+function editPerson(p) {openSettingsPage('person',{personId:p?.id||'new',personReturn:S.ui.set||'root'});}
+function viewPersonSettings() {
+  const p=S.people.find(p=>p.id===S.ui.personId)||null,v=$('#view');
+  if(!p&&S.ui.personId!=='new'){S.ui.set='family';save();viewSettings();return;}
+  v.innerHTML=`${appbar(p?p.name:'Новый человек','Семья',{back:true})}<section class="person-editor">${personForm(p||{sex:'f',age:30,height:165,weight:60})}
+   ${p?`<button class="person-life-link" id="pp-life"><span class="medal">${ic('leaf')}</span><span><b>Образ жизни</b><small>Работа, тренировки и цель</small></span>${ic('chev')}</button>`:''}
+   <div class="actions two">${p&&S.people.length>1?'<button class="btn ghost danger" id="pp-del">Удалить</button>':'<span></span>'}<button class="btn primary" id="pp-save">Сохранить</button></div></section>`;
+  const commit=()=>{const np=readPersonMerged(p);if(!np)return null;if(p)S.people[S.people.findIndex(x=>x.id===p.id)]=np;else S.people.push(np);S.ui.personId=np.id;save();return np;};
+  $('#pp-save').onclick=()=>{if(commit()){toast('Сохранено');settingsBack();}};
+  const life=$('#pp-life');if(life)life.onclick=()=>{const np=commit();if(np)openSettingsPage('life-person',{personId:np.id,lifeReturn:'person'});};
+  const del=$('#pp-del');if(del)del.onclick=()=>{S.people=S.people.filter(x=>x.id!==p.id);save();settingsBack();};
+}
+function viewLifePerson() {
+  const p=S.people.find(p=>p.id===S.ui.personId),v=$('#view');if(!p){S.ui.set='life';save();viewSettings();return;}
+  v.innerHTML=`${appbar(p.name,'Образ жизни',{back:true})}<div class="life-intro"><span class="medal">${ic('leaf')}</span><p>Ваш ритм дня</p></div>${lifeHtml([p])}`;
+  bindLife(v,()=>{const sc=$('#scroller'),y=sc.scrollTop,key=document.activeElement?.dataset.lifeKey,value=document.activeElement?.dataset.lifeValue;render();$('#scroller').scrollTop=y;if(key)v.querySelectorAll('.life-choice').forEach(b=>{if(b.dataset.lifeKey===key&&b.dataset.lifeValue===value)b.focus({preventScroll:true});});});
+  v.querySelectorAll('[data-life] select').forEach(select=>{
+    const label=select.closest('label'),heading=label.querySelector('em');
+    const choices=document.createElement('div');choices.className='life-choices';choices.setAttribute('role','group');choices.setAttribute('aria-label',heading.textContent);
+    for(const option of select.options){const button=document.createElement('button');button.className='life-choice';button.type='button';button.dataset.lifeKey=select.dataset.k;button.dataset.lifeValue=option.value;button.textContent=option.textContent;button.disabled=option.disabled;button.setAttribute('aria-pressed',String(option.selected));button.onclick=()=>{select.value=option.value;select.dispatchEvent(new Event('change',{bubbles:true}));};choices.append(button);}
+    select.hidden=true;label.append(choices);label.classList.add('life-field');
   });
 }
 function historyHtml() {
@@ -2250,10 +2292,11 @@ function historyHtml() {
 /* ---------- Запуск ---------- */
 $('#nav div').innerHTML = [['plan','Рацион'],['stream','Лента'],['shop','Продукты'],['analytics','Аналитика'],['collect','Сбор']].map(([k, t]) => `<button class="tab" data-tab="${k}"><span class="tab-ic">${ic(k)}</span>${t}</button>`).join('');
 document.querySelectorAll('.tab').forEach(b => b.onclick = () => { S.ui.tab = b.dataset.tab; S.ui.set = null; save(); render(); });
+window.addEventListener('popstate',e=>{if(!e.state?.racionRoute)return;Object.assign(S.ui,e.state.racionRoute);save();render();const sc=$('#scroller');if(sc)sc.scrollTop=0;focusSettingsHeading();});
 document.addEventListener('click', e => {
   if (autoRun && (e.target.closest('[data-gear]') || e.target.closest('[data-back]'))) return;
-  if (e.target.closest('[data-gear]')) { S.ui.prevTab = S.ui.tab; S.ui.tab = 'settings'; S.ui.set = null; save(); render(); }
-  else if (e.target.closest('[data-back]')) { if (S.ui.tab === 'prices') { S.ui.tab='shop';save();render();return; } if (S.ui.tab === 'fridge') { S.ui.tab = S.ui.fridgeReturn || 'shop'; save(); render(); return; } if (S.ui.set) S.ui.set = null; else S.ui.tab = S.ui.prevTab || 'plan'; save(); render(); }
+  if (e.target.closest('[data-gear]')) { S.ui.prevTab=S.ui.tab;openSettingsPage(null); }
+  else if (e.target.closest('[data-back]')) { if (S.ui.tab === 'prices') { S.ui.tab='shop';save();render();return; } if (S.ui.tab === 'fridge') { S.ui.tab = S.ui.fridgeReturn || 'shop'; save(); render(); return; } settingsBack(); }
 });
 document.addEventListener('input', e => { if (e.target.id !== 'pf-height' && e.target.id !== 'pf-weight') return;
   const g = $('#pf-goal'), o = g && g.querySelector('option[value="loss"]'); if (!o) return;

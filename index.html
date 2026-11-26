@@ -1477,6 +1477,59 @@ body.empty-stream, body.empty-stream #scroller, body.empty-stream #view { backgr
 
 :root[data-theme="garden"] .recipe-photo.recipe-photo { border-radius:24px 10px 26px 10px; margin:16px 0; }
 
+/* 0.19 — identical prepared cards, quiet shopping tools and personal settings. */
+.deck .dcard.under { display:flex; flex-direction:column; pointer-events:none; }
+:root[data-theme="garden"] .deck .dcard.under { display:flex; flex-direction:column; transform:translateY(11px); border:3px solid #c8a34e; border-radius:28px; box-shadow:0 3px 0 #675b35; }
+:root[data-theme="garden"] .dcard.under .slot { display:flex; align-items:center; justify-content:center; box-sizing:border-box; }
+:root[data-theme="garden"] .dcard .dc-head { background:radial-gradient(ellipse at 0% 0%,#4c875b55,transparent 75%),linear-gradient(125deg,#15563a,#0b3527); color:#fff9e4; box-shadow:inset 0 1px 0 #ead59955; }
+:root[data-theme="garden"] .dcard .dc-head .cname { color:#fff9e4; text-shadow:0 1px 1px #092819; }
+:root[data-theme="garden"] .dcard .grid4.kb>div { background:linear-gradient(135deg,#fffaf0,#e3e7cc); border-color:#b9bf96; box-shadow:inset 0 1px 0 #fffdf8,0 2px 3px -3px #48603b; }
+:root[data-theme="garden"] .dcard .facts div { background:linear-gradient(135deg,#f1efd9,#dfe5ca); box-shadow:inset 0 1px 0 #fffdf899; }
+.shop-tools { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); align-items:stretch; gap:10px; margin:-2px 0 18px; }
+.shop-tools .store-selector { display:flex; flex-direction:column; justify-content:center; gap:2px; margin:0; min-width:0; border:1px solid var(--line); border-radius:16px 10px 16px 10px; padding:6px 10px; background:var(--field-bg); }
+.shop-tools .store-selector>label { font-size:.6875rem; line-height:1.3; }
+.shop-tools .store-selector select { min-height:30px; height:auto; padding:2px 18px 2px 0; border:0; border-radius:0; font-size:.8125rem; background-color:transparent; box-shadow:none; text-overflow:ellipsis; }
+.shop-tools .price-review-btn { margin:0; width:100%; min-height:62px; padding:8px 10px; gap:7px; font-size:.8125rem; line-height:1.3; }
+.shop-tools .price-review-btn>.ic:last-child { display:none; }
+.shop-tools .price-review-btn small { display:block; font-size:.6875rem; line-height:1.4; margin-top:3px; color:#f4dca1; }
+.shopping-progress { position:sticky; top:0; z-index:12; margin:-12px 0 10px; padding:0; height:4px; border:0; border-radius:0; background:transparent; box-shadow:none; }
+.shopping-progress progress { display:block; width:100%; height:4px; border:0; border-radius:0 0 4px 4px; overflow:hidden; accent-color:#c6a45d; background:#294a31; }
+.shopping-progress progress::-webkit-progress-bar { background:#294a31; }
+.shopping-progress progress::-webkit-progress-value { background:linear-gradient(90deg,#83b975,#eed286); transition:width 160ms ease-out; }
+.shopping-progress progress::-moz-progress-bar { background:linear-gradient(90deg,#83b975,#eed286); }
+:root[data-theme="garden"] .shopping-progress.shopping-progress { margin:-12px 0 10px; padding:0; border:0; border-radius:0; background:transparent; box-shadow:none; }
+:root[data-theme="garden"] .shopping-progress.shopping-progress progress { height:4px; margin:0; }
+.person-editor { padding:20px 18px; border:1px solid #a7b48c; border-radius:28px 12px 30px 12px; background:var(--surface); }
+:root[data-theme="garden"] .person-editor { --fg:#163b29;--muted:#56644f;--surface:#fffdf8;--field-bg:#f2efdf;--line:#abb995;--color-focus:#836421; background:var(--paper-fill); color:var(--fg); box-shadow:var(--card-shadow); }
+.person-life-link,.person-tile { display:flex; align-items:center; gap:12px; width:100%; min-width:0; padding:16px; border:1px solid var(--line); border-radius:24px 10px 28px 10px; background:var(--surface); color:var(--fg); text-align:left; }
+.person-life-link { margin:20px 0; }
+.person-life-link>span:nth-child(2),.person-tile>span:nth-child(2) { flex:1; min-width:0; display:grid; gap:3px; }
+.person-life-link small,.person-tile small { font-size:.8125rem; color:var(--muted); }
+.person-tile b { overflow-wrap:anywhere; font-family:"Lora",Georgia,serif; font-size:1.25rem; }
+.life-people { display:grid; gap:14px; }
+:root[data-theme="garden"] .person-tile { --fg:#fff9e5;--muted:#c8d7b6;--surface:#16462f;--line:#82966a; background:var(--green-fill); box-shadow:inset 0 1px 0 #e5ebba66,0 3px 0 #082d20,0 15px 20px -17px #000; }
+.life-intro { display:flex; align-items:center; gap:12px; margin-bottom:18px; }
+.life-intro p { margin:0; color:var(--muted); }
+.life-field { display:flex; flex-direction:column; align-items:stretch; gap:12px; padding-block:16px; }
+.life-field>span { display:block; }
+.life-field em { font-size:.9375rem; font-weight:600; }
+.life-choices { display:flex; flex-wrap:wrap; gap:8px; }
+.life-choice { flex:1 0 60px; min-height:46px; border:1px solid var(--line); border-radius:15px 7px 16px 7px; padding:10px 12px; font:inherit; font-size:.875rem; line-height:1.4; background:var(--surface2); color:var(--fg); cursor:pointer; }
+.life-choice[aria-pressed="true"] { background:var(--gg); color:var(--on-gold); border-color:#8a9d61; box-shadow:inset 0 1px 0 #e6edb966,0 2px 0 #123c26; }
+.life-choice:disabled { opacity:.45; cursor:default; }
+.life-choice:focus-visible,.person-tile:focus-visible,.person-life-link:focus-visible { outline:2px solid var(--color-focus); outline-offset:3px; }
+@media(min-width:860px) { .life-people { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media(max-width:359px) { .shop-tools { gap:8px; } .shop-tools .price-review-btn { padding-inline:8px; } .shop-tools .price-review-btn>.ic { display:none; } }
+
+.shop-tools .price-review-btn { min-width:0; }
+.shop-tools .price-review-btn>span { min-width:0; overflow-wrap:anywhere; }
+.shop-tools .store-selector select { min-width:0; max-width:100%; }
+
+@media(max-height:600px) and (min-width:600px) {
+  :root[data-theme="garden"] .dcard .dc-content>.dc-hero { grid-column:1; grid-row:1; }
+  :root[data-theme="garden"] .dcard .dc-content>.dc-body { grid-column:2; grid-row:1; }
+}
+
 </style>
 </head><body>
 <a class="skip-link" href="#view">К содержимому</a>
@@ -1484,10 +1537,10 @@ body.empty-stream, body.empty-stream #scroller, body.empty-stream #view { backgr
 <nav id="nav" aria-label="Разделы"><div></div></nav>
 <div id="sheet" hidden><div class="sheet-card" role="dialog" aria-modal="true" tabindex="-1"><div class="sheet-grip"><button class="btn ghost sm" id="sheet-close">Закрыть</button></div><div id="sheet-body"></div></div></div>
 <div id="toast" role="status" hidden></div>
-<script src="data.js?v=1795718368"></script>
-<script src="nutrition-data.js?v=1795718368"></script>
-<script src="analytics.js?v=1795718368"></script>
-<script src="pantry.js?v=1795718368"></script>
-<script src="app.js?v=1795718368"></script>
+<script src="data.js?v=1795719757"></script>
+<script src="nutrition-data.js?v=1795719757"></script>
+<script src="analytics.js?v=1795719757"></script>
+<script src="pantry.js?v=1795719757"></script>
+<script src="app.js?v=1795719757"></script>
 </body>
 </html>
