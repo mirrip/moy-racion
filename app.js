@@ -2019,7 +2019,7 @@ function viewSettings() {
     v.innerHTML = `${appbar('Настройки', 'Профиль и приложение', {back: true})}
     <button class="profile" data-person="${me.id}"><span class="mono">${esc(me.name.slice(0, 1).toUpperCase())}</span><span><b>${esc(me.name)}</b><small>${r0(t.E)} ккал · белок ${r0(t.P)} г в день</small></span>${ic('chev', 'sm')}</button>
     <nav class="rows">${SET_PAGES.map(([k, t, s]) => `<button class="row" data-set="${k}"><span class="medal">${ic(SET_IC[k])}</span><span><b>${t}</b><small>${s}</small></span>${ic('chev', 'sm')}</button>`).join('')}</nav>
-    <p class="hint center">Мой рацион · версия 0.23.0</p>`;
+    <p class="hint center">Мой рацион · версия 0.24.0</p>`;
     v.querySelectorAll('[data-set]').forEach(b => b.onclick = () => { openSettingsPage(b.dataset.set); });
     v.querySelector('[data-person]').onclick = () => editPerson(me);
     return;

@@ -5,6 +5,33 @@ const RacionPantry = (() => {
   const key = i => (i.id ? 'id:'+i.id : norm(i.name)) + '|' + dimension(i);
   const valid = n => Number.isFinite(n) && n >= 0 && n <= 1e9;
   const clean = n => Math.round(n * 1e6) / 1e6;
+  // Bundled catalog, loaded once with the app. Never fetch package metadata at runtime.
+  const catalog = typeof RacionPackaging === 'undefined' ? [] : RacionPackaging.products;
+  const catalogIds = new Map(), catalogNames = new Map();
+  for (const product of catalog) {
+    catalogIds.set(String(product.id), product);
+    if (product.legacyId) catalogIds.set(String(product.legacyId), product);
+    const name = norm(product.name);
+    catalogNames.set(name, catalogNames.has(name) ? null : product);
+  }
+  function catalogProduct(i) {
+    // A known ID takes precedence over a display name; names match only exactly.
+    return (i.id && catalogIds.get(String(i.id))) || catalogNames.get(norm(i.name)) || null;
+  }
+  function catalogPacks(i) {
+    const product = catalogProduct(i);
+    if (!product || (i.unit === 'ml' && !(product.density > 0))) return [];
+    return product.packs.map(([grams, observations]) => {
+      let size = grams;
+      if (i.unit === 'ml') size = grams / product.density;
+      else if (i.unit === 'pcs' && product.unit === 'pcs') {
+        const pieces = grams / product.pcs_g;
+        // A true count pack (e.g. ten eggs) follows this ingredient's piece weight.
+        if (Math.abs(pieces - Math.round(pieces)) < 1e-6) size = Math.round(pieces) * (+i.pcs_g || 55);
+      }
+      return {size:clean(size),price:null,source:'catalog',catalogId:product.id,observations};
+    });
+  }
   const find = (state, i) => state.items.find(x => dimension(x) === dimension(i) &&
     ((i.id && x.id && String(x.id) === String(i.id)) || norm(x.name) === norm(i.name)));
   function create(raw, legacy = [], catalog = []) {
@@ -34,6 +61,8 @@ const RacionPantry = (() => {
     state.packs[key(i)] = {size:clean(pack.size),price:pack.price == null ? null : +pack.price};
   }
   function defaultPack(i) {
+    const actual = catalogPacks(i)[0];
+    if (actual) return actual;
     if(i.unit==='ml' && /молок|кефир|ряженк/i.test(i.name))return {size:1000,price:null};
     if((!i.unit || i.unit==='g') && /греч|(?:^|\s)рис(?:$|\s)|пшено|перлов|булгур|фасоль сух|сухая фасоль/i.test(i.name))return {size:1000,price:null};
     return null;
@@ -83,5 +112,5 @@ const RacionPantry = (() => {
     const n=+String(value).replace(',','.'); if(!valid(n))throw new Error('Проверьте количество');
     return clean(n*(unit==='kg'||unit==='l'?1000:unit==='pcs'?(+i.pcs_g||55):1));
   }
-  return {norm,key,find,create,put,remove,setPack,quote,purchase,canUndo,undo,names,coverage,toBase,defaultPack};
+  return {norm,key,find,create,put,remove,setPack,quote,purchase,canUndo,undo,names,coverage,toBase,defaultPack,catalogPacks};
 })();
