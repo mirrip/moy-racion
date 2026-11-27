@@ -777,9 +777,76 @@ function applyPrices(ids, cost) {
   ids.forEach(id => S.dishStore[id] && upd(S.dishStore[id])); allSlots().forEach(sl => upd(sl.dish));
 }
 
+
+/* ---------- Unified app history: root, screens, selection and dialogs ---------- */
+let navReady=false,navRestoring=false,navIndex=0,navPendingRoot=false,navQueued=null,navInitialOverlays=[],navRestoreId=null;
+let navSheetIds=[];const navSheets=new Map();let navSerial=0;
+const navRoot=()=>({tab:'plan',set:null,personId:null,personReturn:null,lifeReturn:null,fridgeReturn:null,prevTab:'plan',day:0,feedId:null,overlays:[]});
+function navSnapshot(){return {tab:S.ui.tab,set:S.ui.set||null,personId:S.ui.personId||null,personReturn:S.ui.personReturn||null,lifeReturn:S.ui.lifeReturn||null,fridgeReturn:S.ui.fridgeReturn||null,prevTab:S.ui.prevTab||'plan',day:S.ui.day||0,feedId:S.feed?.active?S.feed.navId:null,overlays:navSheetIds.map(id=>({id,route:navSheets.get(id)?.opts.route||null}))};}
+const navBase=r=>[r.tab,r.set,r.personId&&(r.set==='person'||r.set==='life-person')?r.personId:null,r.feedId].join('|');
+const navSignature=r=>navBase(r)+'|'+(r.overlays||[]).map(x=>x.id).join(',');
+const navIsRoot=r=>r.tab==='plan'&&!r.set&&!r.feedId&&!(r.overlays||[]).length;
+function navUrl(r){let hash=r.feedId?r.tab+'/selection':r.tab+(r.set?'/'+r.set:'')+((r.set==='person'||r.set==='life-person')&&r.personId?'/'+encodeURIComponent(r.personId):'');const top=r.overlays?.at(-1);if(top)hash+=top.route?.type==='meal'?'/meal/'+top.route.day+'/'+top.route.slot:'/dialog/'+top.id;return '#'+hash;}
+function navSaveScroll(){const current=history.state?.racionNav;if(current){const sc=$('#scroller');history.replaceState({...history.state,racionNav:{...current,scroll:sc?.scrollTop||0}},'');}const top=navSheets.get(navSheetIds.at(-1));if(top)top.scroll=$('#sheet-body')?.scrollTop||0;}
+function navRecord(route,replace=false){if(!navReady||navRestoring)return;if(navPendingRoot){navQueued=route;return;}if(!replace)navSaveScroll();const same=history.state?.racionNav&&navSignature(history.state.racionNav.route)===navSignature(route);if(!replace&&!same)navIndex++;history[replace||same?'replaceState':'pushState']({racionNav:{v:1,index:navIndex,route,scroll:replace||same?history.state?.racionNav?.scroll||0:0}},'',navUrl(route));}
+function navParents(target){const root=navRoot(),list=[root],add=r=>{if(navSignature(list.at(-1))!==navSignature(r))list.push(r);};const screen=tab=>({...root,tab});
+ if(target.tab==='settings'){add(screen('settings'));if(target.set==='person'||target.set==='life-person'){
+  if(target.set==='life-person'&&target.lifeReturn!=='person')add({...screen('settings'),set:'life'});
+  else {if(target.personReturn!=='root')add({...screen('settings'),set:target.personReturn||'family'});if(target.set==='life-person')add({...target,set:'person',feedId:null,overlays:[]});}
+ }else if(target.set)add({...screen('settings'),set:target.set});}
+ else if(target.tab==='fridge')add(screen(target.fridgeReturn||'shop'));
+ else if(target.tab==='prices')add(screen('shop'));
+ if(target.feedId)add({...target,feedId:null,overlays:[]});add(target);return list;
+}
+function navInit(){if(navReady||typeof history==='undefined'||!S.onboarded||!S.people.length)return;
+ if(S.feed?.active&&!S.feed.navId)S.feed.navId='feed_'+crypto.randomUUID();
+ let desired=navSnapshot(),stored=history.state?.racionNav;navReady=true;
+ if(stored?.v===1){navIndex=stored.index;if(navBase(stored.route)===navBase(desired)){navInitialOverlays=stored.route.overlays||[];history.replaceState({racionNav:{...stored,route:{...desired,overlays:navInitialOverlays}}},'',navUrl({...desired,overlays:navInitialOverlays}));}else if(navIndex===0&&!navIsRoot(desired))navRecord(desired);else navRecord(desired,true);return;}
+ const hash=location.hash.slice(1).split('/');if(['plan','stream','shop','analytics','collect','settings','fridge','prices'].includes(hash[0])){desired={...desired,tab:hash[0],set:hash[0]==='settings'?(hash[1]||null):null,personId:hash[2]?decodeURIComponent(hash[2]):desired.personId,feedId:null};Object.assign(S.ui,desired);delete S.ui.overlays;delete S.ui.feedId;}
+ const path=navParents(desired);navIndex=0;history.replaceState({racionNav:{v:1,index:0,route:path[0],scroll:0}},'',navUrl(path[0]));for(const route of path.slice(1))navRecord(route);
+}
+function navHideSheet(){const el=$('#sheet');if(el)el.hidden=true;document.body.classList.remove('sheeted');const sc=$('#scroller'),nav=$('#nav');if(sc)sc.inert=false;if(nav)nav.inert=false;closeSheet.after=null;sheet.returnFocus=null;}
+function navSync(){if(typeof history==='undefined')return true;if(!navReady){navInit();if(!navReady)return true;}if(navRestoring||navInitialOverlays.length)return true;
+ const previous=history.state?.racionNav?.route;let current=navSnapshot();
+ if(previous&&navBase(previous)!==navBase(current)&&navSheetIds.length){navSheetIds=[];navHideSheet();current=navSnapshot();}
+ if(navPendingRoot){navQueued=current;return false;}if(navIsRoot(current)&&navIndex>0){navGoRoot();return false;}
+ if(!previous||navSignature(previous)!==navSignature(current))navRecord(current);else navRecord(current,true);return true;
+}
+function navGoRoot(){if(!navReady){S.ui.tab='plan';S.ui.set=null;if(S.feed)S.feed.active=false;save();render();return;}if(navIndex>0){if(!navPendingRoot){navPendingRoot=true;navQueued=null;history.go(-navIndex);}return;}navApply({index:0,route:navRoot(),scroll:0});}
+function appBack(){if(!navReady){if(!$('#sheet').hidden){closeSheet();return;}S.ui.set=null;S.ui.tab='plan';if(S.feed)S.feed.active=false;save();render();return;}if(navIndex>0){history.back();return;}navGoRoot();}
+function navOpenSheet(html,onMount,opts){if(!navReady)return;let id=navRestoreId;const top=navSheets.get(navSheetIds.at(-1));const same=opts.navKey&&top?.opts.navKey===opts.navKey;if(!id)id=same?navSheetIds.at(-1):'s'+(++navSerial)+'_'+Date.now().toString(36);const opener=top&&same?top.opener:document.activeElement;
+ navSheets.set(id,{html,onMount,opts,opener,scroll:same?top.scroll:0});if(navRestoring)return;
+ if(!same)navSheetIds.push(id);navRecord(navSnapshot(),!!same);
+}
+function navDismissSheets(){if(!navReady||navRestoring)return;navSheetIds=[];navRecord(navSnapshot(),true);}
+function navRestoreSheets(entries){navRestoring=true;navSheetIds=entries.map(e=>e.id);let entry=entries.at(-1);if(entry){const cached=navSheets.get(entry.id);navRestoreId=entry.id;
+ if(cached){sheet(cached.html,cached.onMount,cached.opts);sheet.returnFocus=cached.opener;$('#sheet-body').scrollTop=cached.scroll||0;}
+ else if(entry.route?.type==='meal')mealPage(entry.route.day,entry.route.slot);
+ else {navSheetIds=[];navHideSheet();}
+ navRestoreId=null;}else navHideSheet();navRestoring=false;navInitialOverlays=[];
+}
+function navApply(state){const old=navSnapshot(),oldTop=navSheets.get(navSheetIds.at(-1)),route=state.route;if(oldTop)oldTop.scroll=$('#sheet-body')?.scrollTop||0;navIndex=state.index;navRestoring=true;
+ const changed=navBase(old)!==navBase(route)||S.ui.day!==route.day;
+ Object.assign(S.ui,{tab:route.tab,set:route.set,personId:route.personId,personReturn:route.personReturn,lifeReturn:route.lifeReturn,fridgeReturn:route.fridgeReturn,prevTab:route.prevTab,day:route.day||0});
+ if(S.feed)S.feed.active=!!(route.feedId&&S.feed.navId===route.feedId&&!S.feed.completed&&S.feed.card);
+ if(route.feedId&&!S.feed?.active)S.ui.tab='collect';
+ navSheetIds=[];if(changed){navHideSheet();render();}save();navRestoring=false;
+ if(!route.overlays?.length){navHideSheet();if(oldTop?.opener?.isConnected)oldTop.opener.focus({preventScroll:true});oldTop?.opts.onClose?.();}
+ else navRestoreSheets(route.overlays);
+ const sc=$('#scroller');if(sc)sc.scrollTop=state.scroll||0;
+ if(!route.overlays?.length&&changed)focusSettingsHeading();navRecord(navSnapshot(),true);
+}
+function navPop(state){const dest=state?.racionNav;if(!dest||dest.v!==1){if(state?.racionRoute&&navIndex===0)history.back();return;}
+ if(navPendingRoot){const queued=navQueued;navPendingRoot=false;navQueued=null;navIndex=dest.index;if(queued&&!navIsRoot(queued)){navRecord(queued);navApply({index:navIndex,route:queued,scroll:0});return;}}
+ if(navIsRoot(dest.route)&&dest.index>0){navIndex=dest.index;navGoRoot();return;}
+ if(navSignature(dest.route)===navSignature(navSnapshot())&&dest.index>0){navIndex=dest.index;history.back();return;}
+ navApply(dest);
+}
+
 /* ---------- UI: общие ---------- */
 function toast(t) { const el = $('#toast'); el.textContent = t; el.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => el.hidden = true, 2600); }
 function sheet(html, onMount, opts = {}) {
+  navOpenSheet(html,onMount,opts);
   closeSheet.after = opts.onClose || null;
   const el = $('#sheet'), card = $('.sheet-card');
   if (el.hidden) sheet.returnFocus = document.activeElement;
@@ -795,6 +862,7 @@ function sheet(html, onMount, opts = {}) {
 }
 const closeSheet = () => {
   if ($('#sheet').hidden) return;
+  navDismissSheets();
   const after = closeSheet.after, opener = sheet.returnFocus;
   closeSheet.after = null; sheet.returnFocus = null; $('#sheet').hidden = true; document.body.classList.remove('sheeted');
   $('#scroller').inert = false; $('#nav').inert = false;
@@ -817,7 +885,7 @@ document.addEventListener('keydown', e => {
   const body = $('#sheet-body'), card = $('.sheet-card'); let y0 = null, dy = 0;
   body.addEventListener('touchstart', e => { y0 = body.scrollTop <= 0 ? e.touches[0].clientY : null; dy = 0; }, {passive: true});
   body.addEventListener('touchmove', e => { if (y0 == null) return; dy = e.touches[0].clientY - y0; if (dy <= 0) { card.style.transform = ''; return; } card.style.transition = 'none'; card.style.transform = `translateY(${110 * (1 - Math.exp(-dy / 110))}px)`; }, {passive: true});
-  body.addEventListener('touchend', () => { if (y0 == null) return; y0 = null; card.style.transition = ''; card.style.transform = ''; if (dy > 90) closeSheet(); });
+  body.addEventListener('touchend', () => { if (y0 == null) return; y0 = null; card.style.transition = ''; card.style.transform = ''; if (dy > 90) appBack(); });
 })();
 function applyTheme() {
   const r = document.documentElement;
@@ -827,7 +895,7 @@ function applyTheme() {
   if (meta) meta.content = getComputedStyle(r).getPropertyValue('--bg').trim();
 }
 /* Lucide SVG subset (ISC/MIT) plus original navigation glyphs; see site/licenses/lucide.txt. */
-const IC = {"plan":"<rect x=\"3\" y=\"5\" width=\"18\" height=\"16\" rx=\"4\" fill=\"currentColor\" fill-opacity=\".09\"/><path d=\"M7 3v4m10-4v4M3 10h18\"/><path d=\"m8 15 2.5 2.5L16 12\"/>","stream":"<path d=\"M15 18h-5\" /><path d=\"M18 14h-8\" /><path d=\"M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-4 0v-9a2 2 0 0 1 2-2h2\" /><rect width=\"8\" height=\"4\" x=\"10\" y=\"6\" rx=\"1\" />","shop":"<path d=\"M4 9h16l-1.5 10a2 2 0 0 1-2 2h-9a2 2 0 0 1-2-2z\" fill=\"currentColor\" fill-opacity=\".1\"/><path d=\"M8 9V6a4 4 0 0 1 8 0v3M9 14h6\"/>","collect":"<path d=\"M5 10h14v7a4 4 0 0 1-4 4H9a4 4 0 0 1-4-4z\" fill=\"currentColor\" fill-opacity=\".1\"/><path d=\"M3 10h18M2 13h3m14 0h3M9 7c-2-2 2-3 0-5m6 5c-2-2 2-3 0-5\"/>","analytics":"<path d=\"M4 20h16M6 16v-4m6 4V8m6 8V4\"/><circle cx=\"6\" cy=\"9\" r=\"1\" fill=\"currentColor\"/><circle cx=\"12\" cy=\"5\" r=\"1\" fill=\"currentColor\"/><circle cx=\"18\" cy=\"2\" r=\"1\" fill=\"currentColor\"/>","gear":"<path d=\"M4 7h16M4 17h16\"/><rect x=\"7\" y=\"4\" width=\"4\" height=\"6\" rx=\"2\" fill=\"currentColor\" fill-opacity=\".15\"/><rect x=\"14\" y=\"14\" width=\"4\" height=\"6\" rx=\"2\" fill=\"currentColor\" fill-opacity=\".15\"/>","look":"<path d=\"M12 22a1 1 0 0 1 0-20 10 9 0 0 1 10 9 5 5 0 0 1-5 5h-2.25a1.75 1.75 0 0 0-1.4 2.8l.3.4a1.75 1.75 0 0 1-1.4 2.8z\" /><circle cx=\"13.5\" cy=\"6.5\" r=\".5\" fill=\"currentColor\" /><circle cx=\"17.5\" cy=\"10.5\" r=\".5\" fill=\"currentColor\" /><circle cx=\"6.5\" cy=\"12.5\" r=\".5\" fill=\"currentColor\" /><circle cx=\"8.5\" cy=\"7.5\" r=\".5\" fill=\"currentColor\" />","family":"<path d=\"M18 21a8 8 0 0 0-16 0\" /><circle cx=\"10\" cy=\"8\" r=\"5\" /><path d=\"M22 20c0-3.37-2-6.5-4-8a5 5 0 0 0-.45-8.3\" />","dish":"<path d=\"m16 2-2.3 2.3a3 3 0 0 0 0 4.2l1.8 1.8a3 3 0 0 0 4.2 0L22 8\" /><path d=\"M15 15 3.3 3.3a4.2 4.2 0 0 0 0 6l7.3 7.3c.7.7 2 .7 2.8 0L15 15Zm0 0 7 7\" /><path d=\"m2.1 21.8 6.4-6.3\" /><path d=\"m19 5-7 7\" />","heart":"<path d=\"M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5\" />","shield":"<path d=\"M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z\" /><path d=\"M9 12h6\" /><path d=\"M12 9v6\" />","key":"<path d=\"M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z\" /><circle cx=\"16.5\" cy=\"7.5\" r=\".5\" fill=\"currentColor\" />","history":"<path d=\"M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8\" /><path d=\"M3 3v5h5\" />","data":"<ellipse cx=\"12\" cy=\"5\" rx=\"9\" ry=\"3\" /><path d=\"M3 5V19A9 3 0 0 0 21 19V5\" /><path d=\"M3 12A9 3 0 0 0 21 12\" />","code":"<path d=\"m18 16 4-4-4-4\" /><path d=\"m6 8-4 4 4 4\" /><path d=\"m14.5 4-5 16\" />","chev":"<path d=\"m9 18 6-6-6-6\" />","back":"<path d=\"m15 18-6-6 6-6\" />","leaf":"<path d=\"M11 20a10 10 0 0010-10 25.9 25.9 0 00-1.04-7.281 1 1 0 00-1.755-.325C15.833 5.5 13 5.5 9.8 6.1A7 7 0 0011 20\" /><path d=\"M2 21a5 5 0 012.911-4.544C7.613 15.212 8.351 15.24 11 13\" />","plus":"<path d=\"M5 12h14\" /><path d=\"M12 5v14\" />","down":"<path d=\"m6 9 6 6 6-6\" />","fridge":"<path d=\"M5 6a4 4 0 0 1 4-4h6a4 4 0 0 1 4 4v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6Z\" /><path d=\"M5 10h14\" /><path d=\"M15 7v6\" />"};
+const IC = {"plan":"<rect x=\"3\" y=\"5\" width=\"18\" height=\"16\" rx=\"4\" fill=\"currentColor\" fill-opacity=\".09\"/><path d=\"M7 3v4m10-4v4M3 10h18\"/><path d=\"m8 15 2.5 2.5L16 12\"/>","stream":"<path d=\"M15 18h-5\" /><path d=\"M18 14h-8\" /><path d=\"M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-4 0v-9a2 2 0 0 1 2-2h2\" /><rect width=\"8\" height=\"4\" x=\"10\" y=\"6\" rx=\"1\" />","shop":"<path d=\"M4 9h16l-1.5 10a2 2 0 0 1-2 2h-9a2 2 0 0 1-2-2z\" fill=\"currentColor\" fill-opacity=\".1\"/><path d=\"M8 9V6a4 4 0 0 1 8 0v3M9 14h6\"/>","collect":"<path d=\"M5 10h14v7a4 4 0 0 1-4 4H9a4 4 0 0 1-4-4z\" fill=\"currentColor\" fill-opacity=\".1\"/><path d=\"M3 10h18M2 13h3m14 0h3M9 7c-2-2 2-3 0-5m6 5c-2-2 2-3 0-5\"/>","analytics":"<path d=\"M4 20h16M6 16v-4m6 4V8m6 8V4\"/><circle cx=\"6\" cy=\"9\" r=\"1\" fill=\"currentColor\"/><circle cx=\"12\" cy=\"5\" r=\"1\" fill=\"currentColor\"/><circle cx=\"18\" cy=\"2\" r=\"1\" fill=\"currentColor\"/>","gear":"<path d=\"M14 17H5\" />\n  <path d=\"M19 7h-9\" />\n  <circle cx=\"17\" cy=\"17\" r=\"3\" />\n  <circle cx=\"7\" cy=\"7\" r=\"3\" />","look":"<path d=\"M12 22a1 1 0 0 1 0-20 10 9 0 0 1 10 9 5 5 0 0 1-5 5h-2.25a1.75 1.75 0 0 0-1.4 2.8l.3.4a1.75 1.75 0 0 1-1.4 2.8z\" /><circle cx=\"13.5\" cy=\"6.5\" r=\".5\" fill=\"currentColor\" /><circle cx=\"17.5\" cy=\"10.5\" r=\".5\" fill=\"currentColor\" /><circle cx=\"6.5\" cy=\"12.5\" r=\".5\" fill=\"currentColor\" /><circle cx=\"8.5\" cy=\"7.5\" r=\".5\" fill=\"currentColor\" />","family":"<path d=\"M18 21a8 8 0 0 0-16 0\" /><circle cx=\"10\" cy=\"8\" r=\"5\" /><path d=\"M22 20c0-3.37-2-6.5-4-8a5 5 0 0 0-.45-8.3\" />","dish":"<path d=\"m16 2-2.3 2.3a3 3 0 0 0 0 4.2l1.8 1.8a3 3 0 0 0 4.2 0L22 8\" /><path d=\"M15 15 3.3 3.3a4.2 4.2 0 0 0 0 6l7.3 7.3c.7.7 2 .7 2.8 0L15 15Zm0 0 7 7\" /><path d=\"m2.1 21.8 6.4-6.3\" /><path d=\"m19 5-7 7\" />","heart":"<path d=\"M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5\" />","shield":"<path d=\"M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z\" /><path d=\"M9 12h6\" /><path d=\"M12 9v6\" />","key":"<path d=\"M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z\" /><circle cx=\"16.5\" cy=\"7.5\" r=\".5\" fill=\"currentColor\" />","history":"<path d=\"M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8\" /><path d=\"M3 3v5h5\" />","data":"<ellipse cx=\"12\" cy=\"5\" rx=\"9\" ry=\"3\" /><path d=\"M3 5V19A9 3 0 0 0 21 19V5\" /><path d=\"M3 12A9 3 0 0 0 21 12\" />","code":"<path d=\"m18 16 4-4-4-4\" /><path d=\"m6 8-4 4 4 4\" /><path d=\"m14.5 4-5 16\" />","chev":"<path d=\"m9 18 6-6-6-6\" />","back":"<path d=\"m15 18-6-6 6-6\" />","leaf":"<path d=\"M11 20a10 10 0 0010-10 25.9 25.9 0 00-1.04-7.281 1 1 0 00-1.755-.325C15.833 5.5 13 5.5 9.8 6.1A7 7 0 0011 20\" /><path d=\"M2 21a5 5 0 012.911-4.544C7.613 15.212 8.351 15.24 11 13\" />","plus":"<path d=\"M5 12h14\" /><path d=\"M12 5v14\" />","down":"<path d=\"m6 9 6 6 6-6\" />","fridge":"<path d=\"M5 6a4 4 0 0 1 4-4h6a4 4 0 0 1 4 4v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6Z\" /><path d=\"M5 10h14\" /><path d=\"M15 7v6\" />"};
 const ic = (n, cls = '') => `<svg class="ic ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${IC[n]}</svg>`;
 function appbar(title, sub, opts = {}) {
   return `<header class="appbar">${opts.back ? `<button class="iconbtn" data-back aria-label="Назад">${ic('back')}</button>` : ''}<div class="ab-t"><p class="eyebrow">${sub || 'Мой рацион'}</p><h1 class="gt">${title}</h1></div>${opts.back ? '' : `<button class="iconbtn" data-gear aria-label="Настройки">${ic('gear')}</button>`}</header>`;
@@ -871,6 +939,7 @@ function preservePreparedCard(oldDeck,newDeck) {
 }
 let lastView = '';
 function render() {
+  if(!navSync())return;
   applyTheme(); rollWeek();
   const vk = (S.feed && S.feed.active) ? 'feed' : S.ui.tab + (S.ui.set || ''); const changed = vk !== lastView; if (changed) { const sc = $('#scroller'); if (sc) sc.scrollTop = 0; window.scrollTo(0, 0); lastView = vk; }
   document.querySelectorAll('.tab').forEach(b => { b.setAttribute('aria-current', b.dataset.tab === S.ui.tab ? 'page' : 'false'); b.disabled = !!autoRun; });
@@ -1127,7 +1196,7 @@ function mealPage(day, i) { // блюдо — отдельное полноэк�
    <button class="btn ghost wide" id="mp-replace">Заменить блюдо</button>`, b => {
     b.querySelectorAll('[data-st]').forEach(x => x.onclick = () => { sl.status = sl.status === x.dataset.st ? null : x.dataset.st; save(); render(); mealPage(day, i); });
     $('#mp-replace', b).onclick = () => replaceSlot(day, i);
-  }, {full: true});
+  }, {full: true,navKey:'meal:'+day+':'+i,route:{type:'meal',day,slot:i}});
 }
 function familyMicro() { const t = {}; Object.keys(MICRO).forEach(k => t[k] = 0); S.people.forEach(p => { const m = microNorm(p, S.settings.norms); Object.keys(t).forEach(k => t[k] += m[k]); }); return t; }
 function dayTotals(day) {
@@ -1548,7 +1617,7 @@ function firstEmpty(fromDay = 0) {
 
 async function startFeed(day, slot, manual, accessPending = false) {
   if (autoRun || Object.values(S.settings.medical).some(Boolean)) return;
-  S.feed = Object.assign({v4: true, seen: {}, used: {}, counter: 0, homeQueue: []}, S.feed && S.feed.v4 ? S.feed : {}, {active: true, day, slot, manual, card: null, peek: null, loading: true, exhausted: false, aiWarned: false, accessPending, detailsId: null});
+  S.feed = Object.assign({v4: true, seen: {}, used: {}, counter: 0, homeQueue: []}, S.feed && S.feed.v4 ? S.feed : {}, {active: true, navId:'feed_'+crypto.randomUUID(), completed:false, day, slot, manual, card: null, peek: null, loading: true, exhausted: false, aiWarned: false, accessPending, detailsId: null});
   const F = S.feed;
   render();
   await withLoading(nextCard);
@@ -1623,6 +1692,7 @@ function viewFeed() {
 function closeFeed() {
   const F = S.feed, w = $('#feedwrap'); if (!F || !F.active) return;
   bindFeed.observer?.disconnect();
+  if(navReady){appBack();return;}
   // Commit the closed state before animating, so a quick reload cannot reopen it.
   F.active = false; S.ui.tab = 'plan'; save();
   const fin = () => { if (S.feed === F && !F.active) render(); };
@@ -1702,7 +1772,7 @@ async function takeCard() {
   const F = S.feed; if (!F.card || F.accessPending) return;
   if (place(F.card.dish) === false) { F.card = null; save(); await withLoading(nextCard); return; }
   const next = firstEmpty(F.day);
-  if (!next) { F.active = false; S.ui.tab = 'plan'; save(); render(); toast('Рацион собран. Список покупок готов.'); return; }
+  if (!next) { F.active = false;F.completed=true; S.ui.tab = 'plan'; save(); render(); toast('Рацион собран. Список покупок готов.'); return; }
   F.manual = false; F.peek=F.takePeek; F.takePeek=null; save(); await goSlot(next[0], next[1]);
 }
 async function refuseCard(hard) {
@@ -1949,7 +2019,7 @@ function viewSettings() {
     v.innerHTML = `${appbar('Настройки', 'Профиль и приложение', {back: true})}
     <button class="profile" data-person="${me.id}"><span class="mono">${esc(me.name.slice(0, 1).toUpperCase())}</span><span><b>${esc(me.name)}</b><small>${r0(t.E)} ккал · белок ${r0(t.P)} г в день</small></span>${ic('chev', 'sm')}</button>
     <nav class="rows">${SET_PAGES.map(([k, t, s]) => `<button class="row" data-set="${k}"><span class="medal">${ic(SET_IC[k])}</span><span><b>${t}</b><small>${s}</small></span>${ic('chev', 'sm')}</button>`).join('')}</nav>
-    <p class="hint center">Мой рацион · версия 0.22.0</p>`;
+    <p class="hint center">Мой рацион · версия 0.23.0</p>`;
     v.querySelectorAll('[data-set]').forEach(b => b.onclick = () => { openSettingsPage(b.dataset.set); });
     v.querySelector('[data-person]').onclick = () => editPerson(me);
     return;
@@ -2254,22 +2324,11 @@ function planShapeChanged() {
     sheet(`<h3>Изменить структуру рациона?</h3><p>Новое число приёмов или длина рациона применятся к следующему сбору. Начать текущий рацион заново сейчас?</p><div class="actions two"><button class="btn ghost" id="ps-no">Позже</button><button class="btn primary" id="ps-yes">Начать заново</button></div>`, b => { $('#ps-no', b).onclick = () => { closeSheet(); render(); }; $('#ps-yes', b).onclick = () => { S.plan = null; S.feed = null; save(); closeSheet(); render(); }; });
   else { if (S.plan && !S.plan.days.some(d => d.slots.some(Boolean))) S.plan = null; save(); render(); }
 }
-function settingsLocation() {return {tab:S.ui.tab,set:S.ui.set||null,personId:S.ui.personId||null,lifeReturn:S.ui.lifeReturn||null,personReturn:S.ui.personReturn||null,prevTab:S.ui.prevTab||'plan'};}
 function openSettingsPage(page,extra={}) {
-  if(typeof history!=='undefined')history.replaceState({...history.state,racionRoute:settingsLocation()},'');
-  S.ui.tab='settings';S.ui.set=page;Object.assign(S.ui,extra);save();
-  if(typeof history!=='undefined')history.pushState({racionRoute:settingsLocation(),settingsParent:true},'');
-  render();const sc=$('#scroller');if(sc)sc.scrollTop=0;focusSettingsHeading();
+  S.ui.tab='settings';S.ui.set=page;Object.assign(S.ui,extra);save();render();focusSettingsHeading();
 }
 function focusSettingsHeading(){const heading=$('#view .appbar h1');if(heading){heading.tabIndex=-1;heading.focus({preventScroll:true});}}
-function settingsBack() {
-  if(typeof history!=='undefined'&&history.state?.settingsParent){history.back();return;}
-  if(S.ui.set==='life-person')S.ui.set=S.ui.lifeReturn||'life';
-  else if(S.ui.set==='person')S.ui.set=S.ui.personReturn==='root'?null:(S.ui.personReturn||'family');
-  else if(S.ui.set)S.ui.set=null;
-  else S.ui.tab=S.ui.prevTab||'plan';
-  save();render();focusSettingsHeading();
-}
+function settingsBack(){appBack();}
 function editPerson(p) {openSettingsPage('person',{personId:p?.id||'new',personReturn:S.ui.set||'root'});}
 function viewPersonSettings() {
   const p=S.people.find(p=>p.id===S.ui.personId)||null,v=$('#view');
@@ -2277,7 +2336,7 @@ function viewPersonSettings() {
   v.innerHTML=`${appbar(p?p.name:'Новый человек','Семья',{back:true})}<section class="person-editor">${personForm(p||{sex:'f',age:30,height:165,weight:60})}
    ${`<button class="person-life-link" id="pp-life"><span class="medal">${ic('leaf')}</span><span><b>Образ жизни</b><small>Работа, тренировки и цель</small></span>${ic('chev')}</button>`}
    <div class="actions two">${p&&S.people.length>1?'<button class="btn ghost danger" id="pp-del">Удалить</button>':'<span></span>'}<button class="btn primary" id="pp-save">Сохранить</button></div></section>`;
-  const commit=()=>{const np=readPersonMerged(p);if(!np)return null;if(p)S.people[S.people.findIndex(x=>x.id===p.id)]=np;else S.people.push(np);S.ui.personId=np.id;save();return np;};
+  const commit=()=>{const np=readPersonMerged(p);if(!np)return null;if(p)S.people[S.people.findIndex(x=>x.id===p.id)]=np;else S.people.push(np);S.ui.personId=np.id;save();if(navReady)navRecord(navSnapshot(),true);return np;};
   $('#pp-save').onclick=()=>{if(commit()){toast('Сохранено');settingsBack();}};
   const life=$('#pp-life');if(life)life.onclick=()=>{const np=commit();if(np)openSettingsPage('life-person',{personId:np.id,lifeReturn:'person'});};
   const del=$('#pp-del');if(del)del.onclick=()=>{S.people=S.people.filter(x=>x.id!==p.id);save();settingsBack();};
@@ -2300,21 +2359,22 @@ function historyHtml() {
 
 /* ---------- Запуск ---------- */
 $('#nav div').innerHTML = [['plan','Рацион'],['stream','Лента'],['shop','Продукты'],['analytics','Аналитика'],['collect','Сбор']].map(([k, t]) => `<button class="tab" data-tab="${k}"><span class="tab-ic">${ic(k)}</span>${t}</button>`).join('');
-document.querySelectorAll('.tab').forEach(b => b.onclick = () => { S.ui.tab = b.dataset.tab; S.ui.set = null; save(); render(); });
-window.addEventListener('popstate',e=>{if(!e.state?.racionRoute)return;Object.assign(S.ui,e.state.racionRoute);save();render();const sc=$('#scroller');if(sc)sc.scrollTop=0;focusSettingsHeading();});
+document.querySelectorAll('.tab').forEach(b => b.onclick = () => { if(b.dataset.tab==='plan'&&navReady){navGoRoot();return;}S.ui.tab = b.dataset.tab; S.ui.set = null; save(); render(); });
+window.addEventListener('popstate',e=>navPop(e.state));
+
 document.addEventListener('click', e => {
   if (autoRun && (e.target.closest('[data-gear]') || e.target.closest('[data-back]'))) return;
   if (e.target.closest('[data-gear]')) { S.ui.prevTab=S.ui.tab;openSettingsPage(null); }
-  else if (e.target.closest('[data-back]')) { if (S.ui.tab === 'prices') { S.ui.tab='shop';save();render();return; } if (S.ui.tab === 'fridge') { S.ui.tab = S.ui.fridgeReturn || 'shop'; save(); render(); return; } settingsBack(); }
+  else if (e.target.closest('[data-back]')) appBack();
 });
 document.addEventListener('input', e => { if (e.target.id !== 'pf-height' && e.target.id !== 'pf-weight') return;
   const g = $('#pf-goal'), o = g && g.querySelector('option[value="loss"]'); if (!o) return;
   o.disabled = !lossOk(+$('#pf-height').value, +$('#pf-weight').value); if (o.disabled && g.value === 'loss') g.value = 'keep'; });
-$('#sheet').addEventListener('click', e => { if (e.target.id === 'sheet' || e.target.id === 'sheet-close') closeSheet(); });
-document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSheet(); });
+$('#sheet').addEventListener('click', e => { if (e.target.id === 'sheet' || e.target.id === 'sheet-close') appBack(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape'&&!$('#sheet').hidden) appBack(); });
 if (S.feed && S.feed.active) { S.feed.loading = false; if (!S.feed.card && !S.feed.exhausted) S.feed.active = false; }
 auditPlanSafety(); save();
-render();
+navInit();render();if(navInitialOverlays.length)navRestoreSheets(navInitialOverlays);
 if (S.feed?.active && S.feed.accessPending) authorizeFeed(S.feed);
 poolFill(); window.addEventListener('online', () => poolFill()); // запас блюд докачивается сразу при открытии и при появлении сети
 if ('serviceWorker' in navigator && location.protocol === 'https:' && !location.hostname.endsWith('claude.ai') && !location.hostname.includes('claudeusercontent')) { // новая версия сайта: сервис-воркер обновляется при каждом открытии, страница один раз перезагружается на свежие файлы
