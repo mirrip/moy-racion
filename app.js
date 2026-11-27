@@ -627,6 +627,7 @@ function feedback(d, action) { // отзывы копятся и уходят в
 async function checkKey(silent) { // POST /v1/key — при вводе ключа и перед сбором
   if (!S.settings.accessKey) { S.access = {error: 'no_key', checkedAt: Date.now()}; save(); throw new ApiError('no_key'); }
   const j = await Server.call('/v1/key', {});
+  poolFill.deniedSig=null;
   S.access = {plan: j.plan, until: j.until, days_left: j.days_left, ai_left: j.ai_limit === null ? null : j.ai_left_today, bound_now: !!j.bound_now, checkedAt: Date.now()};
   if (j.tastes && Array.isArray(j.tastes.w) && !S.taste.pendingLvl) S.taste.lvl = j.tastes.w; // неотправленные вкусы уйдут с запасом
   save(); if (!silent && j.bound_now) toast('Ключ привязан к этому устройству');
@@ -727,11 +728,11 @@ function poolReq(P, want) { // блюда «вообще»: нормы глав�
 async function poolFill() { // один запрос на пополнение; параллельные вызовы ждут тот же запрос
   if (poolFill.p) return poolFill.p;
   if (!Server.on() || !S.settings.accessKey || !S.people.length || !S.onboarded) return;
-  const P = poolState(), want = poolWant(P); if (!want) return;
+  const P = poolState(), want = poolWant(P); if (!want || poolFill.deniedSig===P.sig) return;
   poolFill.p = (async () => {
     const req = poolReq(P, want); let j;
     try { j = await Server.call('/v1/pool', req, {timeout: 45000}); }
-    catch (e) { if (!KEY_ERRORS.includes(e.code)) { poolFill.fails = (poolFill.fails || 0) + 1; setTimeout(poolFill, Math.min(60000, 5000 * poolFill.fails)); } return; }
+    catch (e) { if(KEY_ERRORS.includes(e.code))poolFill.deniedSig=P.sig; if (!KEY_ERRORS.includes(e.code)) { poolFill.fails = (poolFill.fails || 0) + 1; setTimeout(poolFill, Math.min(60000, 5000 * poolFill.fails)); } return; }
     poolFill.fails = 0;
     if (req.feedback) S.fbq.splice(0, req.feedback.length);
     if (req.tastes && S.taste.pendingLvl === req.tastes) { S.taste.lvl = req.tastes; delete S.taste.pendingLvl; }
@@ -1621,6 +1622,7 @@ function closeFeed() {
   const fin = () => { if (S.feed === F && !F.active) render(); };
   if (w) { w.classList.add('closing'); setTimeout(fin, 110); } else fin();
 }
+const swipeThreshold = width => Math.max(48,Math.min(72,width*.16));
 const rubber = (v, lim) => Math.sign(v) * lim * (1 - Math.exp(-Math.abs(v) / lim)); // тянется, но не дальше предела
 function bindFeed() {
   const F = S.feed;
@@ -1642,18 +1644,18 @@ function bindFeed() {
   let g = null; // жест: старт, ось, смещение
   const set = (k, v) => card.style.setProperty('--' + k, v);
   const paint = () => { const {axis, rx, ry} = g; if(axis==='x')selectFeedPreview(rx>0?'take':'skip');
-    set('take', axis === 'x' && rx > 0 ? Math.min(1, rx / 90) : 0); set('skip', axis === 'x' && rx < 0 ? Math.min(1, -rx / 90) : 0);
+    set('take', axis === 'x' && rx > 0 ? Math.min(1, rx / swipeThreshold(g.w)) : 0); set('skip', axis === 'x' && rx < 0 ? Math.min(1, -rx / swipeThreshold(g.w)) : 0);
     set('mark', axis === 'y' && ry < 0 ? Math.min(1, -ry / 70) : 0); set('close', axis === 'y' && ry > 0 ? Math.min(1, ry / 80) : 0); };
   const reset = () => { card.classList.remove('drag'); card.style.transform = ''; ['take', 'skip', 'mark', 'close'].forEach(k => set(k, 0)); };
   card.addEventListener('pointerdown', e => { card.getAnimations().forEach(a=>a.cancel()); if (e.button > 0 || e.target.closest('button,a,input,select,textarea')) return; g = {x0: e.clientX, y0: e.clientY, axis: null, rx: 0, ry: 0, content: !!e.target.closest('.dc-content'), w: card.offsetWidth}; card.setPointerCapture(e.pointerId); });
   card.addEventListener('pointermove', e => { if (!g) return;
     g.rx = e.clientX - g.x0; g.ry = e.clientY - g.y0;
     if (!g.axis) { if (Math.hypot(g.rx, g.ry) < 8) return; g.axis = Math.abs(g.rx) > Math.abs(g.ry) ? 'x' : 'y'; if (g.axis === 'y' && g.content) { reset(); g = null; return; } card.classList.add('drag'); }
-    if (g.axis === 'x') { const x = rubber(g.rx, g.w * 0.42); card.style.transform = `translateX(${x}px) rotate(${x * 0.035}deg)`; }
+    if (g.axis === 'x') { const x = rubber(g.rx*1.18, g.w * 0.55); card.style.transform = `translateX(${x}px) rotate(${x * 0.035}deg)`; }
     else { const y = rubber(g.ry, 80); card.style.transform = `translateY(${y}px) scale(${1 - Math.abs(y) / 2400})`; }
     paint(); });
   const end = () => { if (!g) return; const {axis, rx, ry} = g; g = null;
-    if (axis === 'x' && Math.abs(rx) > 90) return fling(rx < 0 ? 'left' : 'right');
+    if (axis === 'x' && Math.abs(rx) >= swipeThreshold(card.offsetWidth)) return fling(rx < 0 ? 'left' : 'right');
     reset();
     if (axis === 'y' && ry > 80) return closeFeed();
     if (axis === 'y' && ry < -70) return markSheet(); };
@@ -1838,30 +1840,30 @@ function priceMeals() {
   if(!S.plan)return [];
   return S.plan.days.flatMap((day,d)=>day.slots.map((sl,slot)=>sl&&!sl.unsafe&&sl.status!=='skipped'?{day:d,slot,sl,price:dishPrice(sl.dish,slot)}:null).filter(Boolean)).sort((a,b)=>b.price-a.price||a.day-b.day||a.slot-b.slot);
 }
-function cheaperCandidate(day,slot) {
+function cheaperCandidate(day,slot,onlyCheaper=true) {
   if(Object.values(S.settings.medical).some(Boolean))return null;
   const old=S.plan?.days[day]?.slots[slot];if(!old||old.leftover||S.shop.bought[addDays(S.plan.start,day)])return null;
   const ctx={day,slot,type:pattern()[slot][0],tg:slotTarget(day,slot),seen:new Set([old.dish.id])};
   const next=S.plan.days[day+1]?.slots[slot],paired=next?.leftover&&next.dish.id===old.dish.id;
   if(paired && S.shop.bought[addDays(S.plan.start,day+1)])return null;
-  return [...new Map([...Object.values(DBMAP),...Object.values(S.dishStore)].map(d=>[d.id,d])).values()].filter(d=>fitsSlot(d,ctx,'repeat')&&!usedInPlan(d.id)&&dishPrice(d,slot)<dishPrice(old.dish,slot)-.01&&(!paired||safeFit(d,day+1,slot).ok)).sort((a,b)=>dishPrice(a,slot)-dishPrice(b,slot))[0]||null;
+  return [...new Map([...Object.values(DBMAP),...Object.values(S.dishStore)].map(d=>[d.id,d])).values()].filter(d=>fitsSlot(d,ctx,'repeat')&&!usedInPlan(d.id)&&(!onlyCheaper||dishPrice(d,slot)<dishPrice(old.dish,slot)-.01)&&(!paired||safeFit(d,day+1,slot).ok)).sort((a,b)=>dishPrice(a,slot)-dishPrice(b,slot))[0]||null;
 }
-async function replaceCheaper(day,slot) {
+async function replaceCheaper(day,slot,onlyCheaper=true) {
   if(Object.values(S.settings.medical).some(Boolean))return false;
   const plan=S.plan,old=plan?.days[day]?.slots[slot];if(!old||old.leftover||S.shop.bought[addDays(plan.start,day)])return false;
-  let d=cheaperCandidate(day,slot);
+  let d=cheaperCandidate(day,slot,onlyCheaper);
   if(!d&&Server.on())try{await fetchDishes({day,slot,type:pattern()[slot][0],tg:slotTarget(day,slot),seen:new Set([old.dish.id])},{count:8});}catch(error){noteServerError(error);}
   if(S.plan!==plan||plan.days[day].slots[slot]!==old)return false;
-  d=d||cheaperCandidate(day,slot);if(!d)return false;
+  d=d||cheaperCandidate(day,slot,onlyCheaper);if(!d)return false;
   const next=plan.days[day+1]?.slots[slot],paired=next?.leftover&&next.dish.id===old.dish.id;
   const first=safePlace(day,slot,d,{automatic:true});if(!first.ok)return false;
   if(paired&&!safePlace(day+1,slot,d,{leftover:true}).ok){plan.days[day].slots[slot]=old;plan.days[day+1].slots[slot]=next;return false;}
-  libTake(d,pattern()[slot][0]);feedback(d,'take');save();return {before:old.dish.name,after:d.name,saving:Math.max(0,dishPrice(old.dish,slot)-dishPrice(d,slot))};
+  libTake(d,pattern()[slot][0]);feedback(d,'take');save();return {before:old.dish.name,after:d.name,price:dishPrice(d,slot),saving:Math.max(0,dishPrice(old.dish,slot)-dishPrice(d,slot))};
 }
 function viewPrices() {
   const meals=priceMeals(),store=selectedPriceStore();
-  $('#view').innerHTML=`${appbar('Цены рациона',store?.name||'Самое дорогое — сверху',{back:true})}<p class="hint">${store&&!Object.keys(S.priceSources.prices[store.id]||{}).length?'Цены магазина ещё не подключены — показаны базовые ориентиры. ':''}Примерная стоимость на семью. Заменяется только выбранное блюдо с сохранением условий подбора.</p><div class="price-meals">${meals.length?meals.map(({day,slot,sl,price})=>`<article class="price-meal">${dishVisual(sl.dish,'price-photo')}<div><small>${esc(fmtDates([day],true))} · ${pattern()[slot][1]}</small><h2>${esc(sl.dish.name)}</h2><b>≈ ${r0(price)} ₽</b><button class="btn ghost" data-price-replace="${day}:${slot}"${sl.leftover||S.shop.bought[addDays(S.plan.start,day)]||Object.values(S.settings.medical).some(Boolean)?' disabled':''}>${sl.leftover?'Повтор блюда':S.shop.bought[addDays(S.plan.start,day)]?'Уже закуплено':'Заменить дешевле'}</button></div></article>`).join(''):'<div class="empty"><h2>Рацион ещё не собран</h2></div>'}</div><p id="price-message" role="status" aria-live="polite"></p>`;
-  document.querySelectorAll('[data-price-replace]').forEach(button=>button.onclick=async()=>{const [day,slot]=button.dataset.priceReplace.split(':').map(Number);button.disabled=true;button.textContent='Ищем дешевле…';const result=await replaceCheaper(day,slot);if(S.ui.tab!=='prices')return;viewPrices();$('#price-message').textContent=result?`${result.after}. Экономия примерно ${r0(result.saving)} ₽.`:'Более дешёвого подходящего варианта пока нет. Блюдо сохранено.';});
+  $('#view').innerHTML=`${appbar('Цены рациона',store?.name||'Самое дорогое — сверху',{back:true})}<p class="hint">${store&&!Object.keys(S.priceSources.prices[store.id]||{}).length?'Цены магазина ещё не подключены — показаны базовые ориентиры. ':''}Примерная стоимость на семью. Заменяется только выбранное блюдо с сохранением условий подбора.</p><div class="price-meals">${meals.length?meals.map(({day,slot,sl,price})=>`<article class="price-meal">${dishVisual(sl.dish,'price-photo')}<div class="price-info"><small>${esc(fmtDates([day],true))} · ${pattern()[slot][1]}</small><h2>${esc(sl.dish.name)}</h2><b>≈ ${r0(price)} ₽</b></div><button class="btn ghost price-replace" data-price-replace="${day}:${slot}"${sl.leftover||S.shop.bought[addDays(S.plan.start,day)]||Object.values(S.settings.medical).some(Boolean)?' disabled':''}>${sl.leftover?'Повтор блюда':S.shop.bought[addDays(S.plan.start,day)]?'Уже закуплено':'Заменить блюдо'}</button></article>`).join(''):'<div class="empty"><h2>Рацион ещё не собран</h2></div>'}</div><p id="price-message" role="status" aria-live="polite"></p>`;
+  document.querySelectorAll('[data-price-replace]').forEach(button=>button.onclick=async()=>{const [day,slot]=button.dataset.priceReplace.split(':').map(Number);button.disabled=true;button.textContent='Подбираем…';const result=await replaceCheaper(day,slot,false);if(S.ui.tab!=='prices')return;viewPrices();$('#price-message').textContent=result?`${result.after}. Примерная стоимость ${r0(result.price)} ₽.`:'Другого подходящего варианта пока нет. Блюдо сохранено.';});
 }
 function viewShop() {
   const v = $('#view');
@@ -1941,7 +1943,7 @@ function viewSettings() {
     v.innerHTML = `${appbar('Настройки', 'Профиль и приложение', {back: true})}
     <button class="profile" data-person="${me.id}"><span class="mono">${esc(me.name.slice(0, 1).toUpperCase())}</span><span><b>${esc(me.name)}</b><small>${r0(t.E)} ккал · белок ${r0(t.P)} г в день</small></span>${ic('chev', 'sm')}</button>
     <nav class="rows">${SET_PAGES.map(([k, t, s]) => `<button class="row" data-set="${k}"><span class="medal">${ic(SET_IC[k])}</span><span><b>${t}</b><small>${s}</small></span>${ic('chev', 'sm')}</button>`).join('')}</nav>
-    <p class="hint center">Мой рацион · версия 0.20.0</p>`;
+    <p class="hint center">Мой рацион · версия 0.21.0</p>`;
     v.querySelectorAll('[data-set]').forEach(b => b.onclick = () => { openSettingsPage(b.dataset.set); });
     v.querySelector('[data-person]').onclick = () => editPerson(me);
     return;
@@ -1992,7 +1994,13 @@ function viewSettings() {
   on('#st-meals', 'onchange', e => { if (e.target.value === 'auto') st.mealsAuto = true; else { st.mealsAuto = false; st.meals = +e.target.value; } planShapeChanged(); });
   v.querySelectorAll('[data-len]').forEach(b => b.onclick = () => { st.planLen = +b.dataset.len; planShapeChanged(); });
   v.querySelectorAll('[data-alg]').forEach(b => b.onchange = () => { const k = b.dataset.alg, a = st.allergens = st.allergens || []; b.checked ? a.includes(k) || a.push(k) : a.splice(a.indexOf(k), 1); save(); });
-  on('#st-acc-check', 'onclick', async () => { st.accessKey = $('#st-acc').value.trim(); save(); if (!Server.on()) { toast('Ключ сохранён. Проверка — когда будет подключён сервер.'); render(); return; } try { await checkKey(); toast('Ключ действует'); } catch (e) { toast(e.message); } render(); });
+  on('#st-acc-check','onclick',async e=>{
+    const button=e.currentTarget;if(button.disabled)return;button.disabled=true;button.textContent='Проверяем…';
+    st.accessKey=$('#st-acc').value.trim();save();
+    try{if(!Server.on()){toast('Ключ сохранён. Проверка — когда будет подключён сервер.');return;}await checkKey();toast('Ключ действует');}
+    catch(error){toast(error.message);}
+    finally{save();render();}
+  });
   on('#st-srv', 'onchange', e => { st.serverUrl = e.target.value.trim(); S.access = null; save(); render(); });
   on('#st-bot', 'onchange', e => { st.botUrl = e.target.value.trim(); save(); });
   if (pg === 'tastes') bindTastes(v);
