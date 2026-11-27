@@ -553,7 +553,7 @@ function peekNext(cur) {
     try{day.slots[F.slot]={dish:cur,status:null};const next=feedCtx(nx[0],nx[1]);const d=cachedCandidate(next,cur.id,true);if(d)F.takePeek={day:nx[0],slot:nx[1],id:d.id};}
     finally{day.slots[F.slot]=old;}
   }
-  const preview=F.peek||F.takePeek;if(preview){const photo=dishPhoto(getDish(preview.id));if(photo && typeof Image!=='undefined')new Image().src=photo;}
+  for(const preview of [F.peek,F.takePeek])if(preview){const photo=dishPhoto(getDish(preview.id));if(photo && typeof Image!=='undefined')new Image().src=photo;}
 }
 function selectFeedPreview(action) {
   const F=S.feed,peek=action==='take'?F.takePeek:F.peek;if(!peek)return;
@@ -859,7 +859,7 @@ function preservePreparedCard(oldDeck,newDeck) {
     source.replaceChildren(...fresh.childNodes);
     for(const attr of [...source.attributes])source.removeAttribute(attr.name);
     for(const attr of fresh.attributes)source.setAttribute(attr.name,attr.value);
-    fresh.replaceWith(source);
+    fresh.replaceWith(source);return source;
   }
 }
 let lastView = '';
@@ -873,7 +873,7 @@ function render() {
   $('#nav').hidden = false;
   const feeding = !!(S.feed && S.feed.active); document.body.classList.toggle('feeding', feeding);
   if (feeding) { const old = $('#feedwrap');
-    if (old) { const t = document.createElement('div'); t.innerHTML = viewFeed(); const nw = t.firstElementChild; ['.ftop', '.deck'].forEach(q => { const a = old.querySelector(q), b = nw.querySelector(q); if (a && b) { if(q==='.deck')preservePreparedCard(a,b); a.replaceWith(b); } }); }
+    if (old) { const t = document.createElement('div'); t.innerHTML = viewFeed(); const nw = t.firstElementChild; ['.ftop', '.deck'].forEach(q => { const a = old.querySelector(q), b = nw.querySelector(q); if (a && b) { const promoted=q==='.deck'?preservePreparedCard(a,b):null;a.replaceWith(b);if(promoted&&!window.matchMedia('(prefers-reduced-motion: reduce)').matches)promoted.animate([{transform:'translateY(11px)'},{transform:'translateY(0)'}],{duration:260,easing:'cubic-bezier(.2,.7,.25,1)'}); } }); }
     else v.innerHTML = viewFeed();
     bindFeed(); $('#nav').hidden = true; return; }
   if (['settings','fridge','prices'].includes(S.ui.tab)) $('#nav').hidden = true;
@@ -1113,8 +1113,8 @@ function mealPage(day, i) { // блюдо — отдельное полноэк�
    <div class="grid4"><div><b>${r0(n.kcal)}</b><span>ккал</span></div><div><b>${r0(n.p)}</b><span>белки, г</span></div><div><b>${r0(n.f)}</b><span>жиры, г</span></div><div><b>${r0(n.c)}</b><span>углеводы, г</span></div></div>
    <div class="facts"><div><em>Готовка</em><b>${d.time} мин</b></div><div><em>Стоимость</em><b>≈ ${r0(famCost(d) / 10) * 10} ₽</b></div></div>
    ${S.marks.notes[d.id] ? `<p class="note">${ic('heart', 'sm')} ${esc(S.marks.notes[d.id])}</p>` : ''}
-   <h4>Ингредиенты на всех · ${r0(n.g)} г</h4><ul class="ing">${d.ing.map(x => `<li><span>${esc(x.name)}</span><b>${fmtAmt(x, x.g * ff)}</b></li>`).join('')}${d.salt || d.saltOrig ? '<li><span>Соль</span><b>по вкусу</b></li>' : ''}</ul>
-   ${stepsOf(d).length ? `<h4>Как готовить</h4><ol class="steps">${stepsOf(d).map(t => `<li>${esc(t)}</li>`).join('')}</ol>` : ''}
+   <section class="recipe-block recipe-ingredients"><h4>Ингредиенты на всех · ${r0(n.g)} г</h4><ul class="ing">${d.ing.map(x => `<li><span>${esc(x.name)}</span><b>${fmtAmt(x, x.g * ff)}</b></li>`).join('')}${d.salt || d.saltOrig ? '<li><span>Соль</span><b>по вкусу</b></li>' : ''}</ul></section>
+   ${stepsOf(d).length ? `<section class="recipe-block recipe-method"><h4>Как готовить</h4><ol class="steps">${stepsOf(d).map(t => `<li>${esc(t)}</li>`).join('')}</ol></section>` : ''}
    ${S.people.length > 1 ? `<h4>Порции по людям</h4><ul class="ing">${S.people.map((p, k) => `<li><span>${esc(p.name)}</span><b>${r0(base.g * fs[k])} г · ${r0(base.kcal * fs[k])} ккал</b></li>`).join('')}</ul>` : ''}
    ${day <= ti ? `<div class="actions two"><button class="btn${sl.status === 'eaten' ? ' primary' : ' ghost'}" data-st="eaten">Съедено</button><button class="btn${sl.status === 'skipped' ? ' primary' : ' ghost'}" data-st="skipped">Пропущено</button></div>` : ''}
    <button class="btn ghost wide" id="mp-replace">Заменить блюдо</button>`, b => {
@@ -1567,24 +1567,23 @@ function prepareFeedBackground(F) {
 const FIC = {"take":"<path d=\"M20 6 9 17l-5-5\" />","skip":"<path d=\"M18 6 6 18\" /><path d=\"m6 6 12 12\" />","dis":"<path d=\"M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88Z\" /><path d=\"M17 14V2\" />","mark":"<path d=\"M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7\" /><path d=\"M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z\" />"};
 const fic = n => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${FIC[n]}</svg>`;
 function cardHtml(d, m, slot, under, collapsed=false) { // under — следующая карточка, лежит под текущей (без кнопок и жестов)
-  const ff = famFactor(d, slot), n = nut(d, ff), expanded = !under && !collapsed && S.feed?.detailsId === d.id;
+  const ff = famFactor(d, slot), n = nut(d, ff);
   const ing = d.ing.map(x => `<li><span>${esc(x.name)}</span><i></i><b>${fmtAmt(x, x.g * ff)}</b></li>`).join('');
   if (under) {
     const markup=cardHtml(d,m,slot,false,true);
-    const neutralSlots=`<div class="slots">${pattern().map(x=>`<span class="slot">${x[1]}</span>`).join('')}</div>`;
+    const neutralSlots=`<div class="slots">${pattern().map((x,i)=>`<span class="slot${i===slot?' on':''}">${x[1]}</span>`).join('')}</div>`;
     return markup.replace('class="dcard','aria-hidden="true" inert data-preview-id="'+esc(d.id)+'" class="dcard under')
       .replace(/(<article[^>]*>)/,'$1'+neutralSlots).replace('</article>',feedActionsHtml(!!S.feed?.accessPending)+'</article>')
       .replace(/ id="[^"]*"/g,'').replace(/ aria-controls="[^"]*"/g,'').replace(/ tabindex="[^"]*"/g,'');
   }
-  return `<article class="dcard${expanded ? ' details-open' : ''}" id="card" data-dish-id="${esc(d.id)}" tabindex="0" aria-label="${esc(d.name)}">
+  return `<article class="dcard details-open" id="card" data-dish-id="${esc(d.id)}" tabindex="0" aria-label="${esc(d.name)}">
    <span class="stamp st-take">Взять</span><span class="stamp st-skip">Пропуск</span><span class="stamp st-mark">Пометка</span><span class="stamp st-close">Свернуть</span>
    <div class="dc-content" tabindex="0" role="region" aria-label="Сведения о блюде"><div class="dc-hero">${dishVisual(d, 'feed-photo')}
     <div class="dc-head"><h3 class="cname">${esc(d.name)}</h3></div></div>
    <div class="dc-body">
     <div class="grid4 kb"><div><b>${r0(n.kcal)}</b><span>ккал</span></div><div><b>${r0(n.p)}</b><span>белки, г</span></div><div><b>${r0(n.f)}</b><span>жиры, г</span></div><div><b>${r0(n.c)}</b><span>углев., г</span></div></div>
     <div class="facts"><div><em>Готовка</em><b>${d.time} мин</b></div><div><em>Стоимость</em><b>≈ ${r0(famCost(d) / 10) * 10} ₽</b></div></div>
-    <button class="ingmore" id="ingmore" aria-controls="ingbox" aria-expanded="${expanded}">${expanded ? 'Свернуть описание' : 'Читать полностью'}</button>
-    <div class="ingbox" id="ingbox"${expanded ? '' : ' hidden'}>${S.marks.notes[d.id] ? `<p class="note">${esc(S.marks.notes[d.id])}</p>` : ''}<p class="ingh">Ингредиенты · на ${S.people.length > 1 ? 'всю семью' : 'вас'}</p><ul class="ings">${ing}</ul>
+    <div class="ingbox" id="ingbox">${S.marks.notes[d.id] ? `<p class="note">${esc(S.marks.notes[d.id])}</p>` : ''}<p class="ingh">Ингредиенты · на ${S.people.length > 1 ? 'всю семью' : 'вас'}</p><ul class="ings">${ing}</ul>
      ${stepsOf(d).length ? `<p class="ingh">Как готовить</p><ol class="csteps">${stepsOf(d).map(t => `<li>${esc(t)}</li>`).join('')}</ol>` : ''}</div>
    </div></div></article>`;
 }
@@ -1595,7 +1594,7 @@ function feedActionsHtml(pending=false) {
     <button class="fb fb-mark" id="f-mark" aria-label="Пометка">${fic('mark')}<span>Пометка</span></button>
     <button class="fb fb-take" id="f-take" aria-label="Взять">${fic('take')}<span>Взять</span></button>
    </div>
-   ${pending ? '<p class="feed-access-status" role="status">Проверяем доступ</p>' : ''}<p class="gest"><span>← пропуск</span><span>взять →</span><span>Подробнее — «Читать полностью»</span></p></footer>`;
+   ${pending ? '<p class="feed-access-status" role="status">Проверяем доступ</p>' : ''}<p class="gest"><span>← пропуск</span><span>взять →</span><span>Листайте описание</span></p></footer>`;
 }
 function viewFeed() {
   const F = S.feed, pat = pattern(), m = pat[F.slot];
@@ -1622,14 +1621,6 @@ function closeFeed() {
   const fin = () => { if (S.feed === F && !F.active) render(); };
   if (w) { w.classList.add('closing'); setTimeout(fin, 110); } else fin();
 }
-function ingFull() {
-  const F = S.feed, card = $('#card'), body = $('#ingbox'), button = $('#ingmore');
-  if (!F?.card || !card || !body || !button) return;
-  const open = body.hidden;
-  body.hidden = !open; card.classList.toggle('details-open', open);
-  button.setAttribute('aria-expanded', String(open)); button.textContent = open ? 'Свернуть описание' : 'Читать полностью';
-  F.detailsId = open ? F.card.dish.id : null; if (!open) $('.dc-content', card).scrollTop = 0; save();
-}
 const rubber = (v, lim) => Math.sign(v) * lim * (1 - Math.exp(-Math.abs(v) / lim)); // тянется, но не дальше предела
 function bindFeed() {
   const F = S.feed;
@@ -1646,7 +1637,7 @@ function bindFeed() {
   bindFeed.observer?.disconnect();
   const fitText=()=>card.classList.toggle('large-text',parseFloat(getComputedStyle(document.documentElement).fontSize)>20); fitText();
   bindFeed.observer=new ResizeObserver(fitText); bindFeed.observer.observe($('.dc-content',card));
-  const more = $('#ingmore'); more.onclick = ingFull; more.addEventListener('pointerdown', e => e.stopPropagation());
+
   if (!live) return;
   let g = null; // жест: старт, ось, смещение
   const set = (k, v) => card.style.setProperty('--' + k, v);
@@ -1654,7 +1645,7 @@ function bindFeed() {
     set('take', axis === 'x' && rx > 0 ? Math.min(1, rx / 90) : 0); set('skip', axis === 'x' && rx < 0 ? Math.min(1, -rx / 90) : 0);
     set('mark', axis === 'y' && ry < 0 ? Math.min(1, -ry / 70) : 0); set('close', axis === 'y' && ry > 0 ? Math.min(1, ry / 80) : 0); };
   const reset = () => { card.classList.remove('drag'); card.style.transform = ''; ['take', 'skip', 'mark', 'close'].forEach(k => set(k, 0)); };
-  card.addEventListener('pointerdown', e => { if (e.button > 0 || e.target.closest('button,a,input,select,textarea')) return; g = {x0: e.clientX, y0: e.clientY, axis: null, rx: 0, ry: 0, content: !!e.target.closest('.dc-content'), w: card.offsetWidth}; card.setPointerCapture(e.pointerId); });
+  card.addEventListener('pointerdown', e => { card.getAnimations().forEach(a=>a.cancel()); if (e.button > 0 || e.target.closest('button,a,input,select,textarea')) return; g = {x0: e.clientX, y0: e.clientY, axis: null, rx: 0, ry: 0, content: !!e.target.closest('.dc-content'), w: card.offsetWidth}; card.setPointerCapture(e.pointerId); });
   card.addEventListener('pointermove', e => { if (!g) return;
     g.rx = e.clientX - g.x0; g.ry = e.clientY - g.y0;
     if (!g.axis) { if (Math.hypot(g.rx, g.ry) < 8) return; g.axis = Math.abs(g.rx) > Math.abs(g.ry) ? 'x' : 'y'; if (g.axis === 'y' && g.content) { reset(); g = null; return; } card.classList.add('drag'); }
@@ -1673,7 +1664,7 @@ async function fling(dir) {
   const F = S.feed; if (flinging || !F.card || F.loading || F.accessPending) return; flinging = true;
   selectFeedPreview(dir==='right'?'take':'skip');
   const card = $('#card');
-  if (card) { card.classList.remove('drag'); if (dir !== 'dis') card.style.setProperty('--' + ({left: 'skip', right: 'take'})[dir], 1);
+  if (card) { card.getAnimations().forEach(a=>a.cancel()); card.classList.remove('drag'); if (dir !== 'dis') card.style.setProperty('--' + ({left: 'skip', right: 'take'})[dir], 1);
     card.style.transform = {left: 'translateX(-120%) rotate(-12deg)', right: 'translateX(120%) rotate(12deg)', dis: 'scale(.82)'}[dir]; card.style.opacity = '0'; if (dir === 'dis') card.classList.add('disliked'); await sleep(170); }
   flinging = false;
   if (dir === 'right') return takeCard();
@@ -1832,22 +1823,13 @@ function storeIngredient(i) {
   return Number.isFinite(value)&&value>=0?{...i,price:value,storePriceKnown:true}:i;
 }
 function storeHtml() {
-  const store=selectedPriceStore(),hasPrices=Object.keys(S.priceSources.prices[S.priceSources.selected]||{}).length;
-  return `<div class="store-selector"><label for="shop-store">Магазин</label><select id="shop-store" aria-label="Магазин${store&&!hasPrices?' — пока базовые цены':''}"><option value="catalog">Базовые цены</option>${S.priceSources.stores.map(x=>`<option value="${esc(x.id)}"${x.id===S.priceSources.selected?' selected':''}>${esc(x.name)}</option>`).join('')}<option value="__new">Добавить магазин…</option></select></div>`;
+  return `<button type="button" id="shop-store" class="store-placeholder" aria-disabled="true" aria-label="Магазин — пока недоступно"><span>Магазин</span></button>`;
 }
 function shopTools(total=0,budget=0) {
   const over=budget>0&&total>budget;
   return `<div class="shop-tools">${storeHtml()}<button class="btn ghost price-review-btn" id="s-prices">${ic('analytics')}<span>Посмотреть цены${over?`<small>Перерасход ≈ ${r0(total-budget)} ₽</small>`:''}</span>${ic('chev')}</button></div>`;
 }
-function bindStore() {
-  const select=$('#shop-store');if(!select)return;
-  select.onchange=()=>{if(select.value!=='__new'){S.priceSources.selected=select.value;save();render();return;}
-    select.value=S.priceSources.selected;
-    sheet('<h2>Добавить магазин</h2><form id="store-form"><label>Название магазина<input id="store-name" maxlength="80" required autocomplete="off" placeholder="Название магазина"></label><p class="hint">Обновление цен подключается отдельно. До этого расчёт останется по базовому каталогу.</p><button class="btn primary wide" type="submit">Добавить</button></form>',body=>{
-      $('#store-form').onsubmit=e=>{e.preventDefault();const name=$('#store-name').value.trim();if(!name)return;let store=S.priceSources.stores.find(x=>nameKey(x.name)===nameKey(name));if(!store){store={id:'store_'+crypto.randomUUID(),name};S.priceSources.stores.push(store);}S.priceSources.selected=store.id;save();closeSheet();render();};
-    });
-  };
-}
+function bindStore() {}
 function dishPrice(d,slot) {
   const factor=famFactor(d,slot),delta=d.ing.reduce((sum,i)=>{const source=storeIngredient(i);return sum+(source.storePriceKnown?(source.price-(+i.price||0))*i.g*factor/1000:0);},0);
   return Math.max(0,famCost(d)+delta);
@@ -1959,7 +1941,7 @@ function viewSettings() {
     v.innerHTML = `${appbar('Настройки', 'Профиль и приложение', {back: true})}
     <button class="profile" data-person="${me.id}"><span class="mono">${esc(me.name.slice(0, 1).toUpperCase())}</span><span><b>${esc(me.name)}</b><small>${r0(t.E)} ккал · белок ${r0(t.P)} г в день</small></span>${ic('chev', 'sm')}</button>
     <nav class="rows">${SET_PAGES.map(([k, t, s]) => `<button class="row" data-set="${k}"><span class="medal">${ic(SET_IC[k])}</span><span><b>${t}</b><small>${s}</small></span>${ic('chev', 'sm')}</button>`).join('')}</nav>
-    <p class="hint center">Мой рацион · версия 0.19.1</p>`;
+    <p class="hint center">Мой рацион · версия 0.20.0</p>`;
     v.querySelectorAll('[data-set]').forEach(b => b.onclick = () => { openSettingsPage(b.dataset.set); });
     v.querySelector('[data-person]').onclick = () => editPerson(me);
     return;
