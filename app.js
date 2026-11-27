@@ -591,12 +591,14 @@ const API_MSG = {
 };
 const KEY_ERRORS = ['no_key', 'key_not_found', 'expired', 'device_mismatch', 'blocked'];
 class ApiError extends Error { constructor(code, msg, data) { super(msg || API_MSG[code] || API_MSG.server_error); this.code = code; this.data = data || {}; } }
+const apiIdentity = () => S.settings.serverUrl.trim()+'\n'+S.settings.accessKey;
+const staleRequest = () => new ApiError('stale_response','Параметры запроса изменились');
 const Server = {
   on: () => !!S.settings.serverUrl,
   base: () => S.settings.serverUrl.trim().replace(/\/$/, ''),
   relay: () => /^https:\/\/script\.google(usercontent)?\.com\/macros\//.test(Server.base()),
   async call(path, body, opts = {}) {
-    const keyed = opts.keyed !== false, t0 = performance.now(), relay = this.relay();
+    const keyed = opts.keyed !== false, t0 = performance.now(), relay = this.relay(), owner=S, identity=apiIdentity(), current=()=>S===owner&&apiIdentity()===identity;
     const req = keyed ? Object.assign({key: S.settings.accessKey, device: deviceId()}, body || {}) : body;
     let res, j; const ac = new AbortController(), tm = setTimeout(() => ac.abort(), opts.timeout || 30000); // зависшее соединение не держит карточку (нейросеть на сервере — до 25 с)
     // Переходник: путь — в ?p=, тело — обычный текст (без Content-Type: Apps Script не отвечает на предварительный запрос CORS)
@@ -605,12 +607,13 @@ const Server = {
       res = await fetch(url, opts.get ? {method: 'GET', signal: ac.signal} : relay ? {method: 'POST', body: JSON.stringify(req), signal: ac.signal}
         : {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(req), signal: ac.signal});
       j = await res.json().catch(() => ({ok: false, error: 'server_error'}));
-    } catch (e) { logApi(path, req, {ok: false, error: 'net', message: e.message}, t0); throw new ApiError('net'); }
+    } catch (e) { if(!current())throw staleRequest();logApi(path, req, {ok: false, error: 'net', message: e.message}, t0); throw new ApiError('net'); }
     finally { clearTimeout(tm); }
+    if(!current())throw staleRequest();
     logApi(path, req, j, t0, res.status);
     if (j && j.ok) return j;
     const code = (j && j.error) || 'server_error';
-    if (code === 'rate_limited' && !opts.retried) { await sleep(Math.min(10, +j.retry_after || 2) * 1000); return this.call(path, body, Object.assign({}, opts, {retried: true})); }
+    if (code === 'rate_limited' && !opts.retried) { await sleep(Math.min(10, +j.retry_after || 2) * 1000); if(!current())throw staleRequest();return this.call(path, body, Object.assign({}, opts, {retried: true})); }
     if (code === 'server_error' && (res.status >= 500 || relay) && !opts.retried) return this.call(path, body, Object.assign({}, opts, {retried: true})); // разовый сбой сети между Cloudflare и сервером
     if (KEY_ERRORS.includes(code)) S.access = Object.assign({}, S.access || {}, {error: code, until: j.until || (S.access && S.access.until), checkedAt: Date.now()});
     throw new ApiError(code, (code in API_MSG && !['bad_request', 'not_found', 'server_error'].includes(code)) ? API_MSG[code] : (j && j.message) || API_MSG[code], j);
@@ -626,7 +629,7 @@ function feedback(d, action) { // отзывы копятся и уходят в
 }
 async function checkKey(silent) { // POST /v1/key — при вводе ключа и перед сбором
   if (!S.settings.accessKey) { S.access = {error: 'no_key', checkedAt: Date.now()}; save(); throw new ApiError('no_key'); }
-  const j = await Server.call('/v1/key', {});
+  const identity=apiIdentity(),j = await Server.call('/v1/key', {});if(apiIdentity()!==identity)throw staleRequest();
   poolFill.deniedSig=null;
   S.access = {plan: j.plan, until: j.until, days_left: j.days_left, ai_left: j.ai_limit === null ? null : j.ai_left_today, bound_now: !!j.bound_now, checkedAt: Date.now()};
   if (j.tastes && Array.isArray(j.tastes.w) && !S.taste.pendingLvl) S.taste.lvl = j.tastes.w; // неотправленные вкусы уйдут с запасом
@@ -654,12 +657,13 @@ function eaterReq(day, slot) { // API §3 `eater`: главный едок — �
 function dishRequest(ctx, extra = {}) { // тело /v1/dish: только нормы и параметры, без имён и личных данных
   const pat = pattern(), st = S.settings, ex = new Set();
   allSlots().forEach(sl => ex.add(sl.dish.id)); (ctx.seen || []).forEach(id => ex.add(id));
-  return Object.assign({meal: pat[ctx.slot][0], sections: secs(ctx.slot), count: 1, eater: eaterReq(ctx.day, ctx.slot), week: S.plan ? (w => Object.assign(w, {eggs_left: Math.floor(w.eggs_left * 10) / 10, redmeat_g_left: Math.floor(w.redmeat_g_left)}))(weekLeft(ctx.day, ctx.slot)) : undefined, deficits: weekDeficits(),
+  const request=Object.assign({meal: pat[ctx.slot][0], sections: secs(ctx.slot), count: 1, eater: eaterReq(ctx.day, ctx.slot), week: S.plan ? (w => Object.assign(w, {eggs_left: Math.floor(w.eggs_left * 10) / 10, redmeat_g_left: Math.floor(w.redmeat_g_left)}))(weekLeft(ctx.day, ctx.slot)) : undefined, deficits: weekDeficits(),
     meal_share: pat[ctx.slot][2] / 100, budget_left: Math.max(0, r0(budgetLeft())), meals_left: mealsLeft(), meals_per_day: S.plan.meals,
     allergies: st.allergens || [], diet: DIET_API[st.diet] || 'all', forbid: st.forbidden, exclude: [...ex].filter(id => !DBMAP[id]).slice(-300), other_cuisines: !!S.collect.otherCuisines}, extra);
+  request.count=Math.max(1,Math.min(5,Math.floor(+request.count)||1));return request;
 }
 async function fetchDishes(ctx, extra) {
-  const t0 = performance.now(), j = await Server.call('/v1/dish', dishRequest(ctx, extra));
+  const identity=poolSig(),t0 = performance.now(), j = await Server.call('/v1/dish', dishRequest(ctx, extra));if(poolSig()!==identity)throw staleRequest();
   if ((j.source || []).includes('ai')) { S.aiTimes.push(performance.now() - t0); S.aiTimes = S.aiTimes.slice(-20); }
   if (S.access) S.access.ai_left = j.ai_limit === null || j.ai_left_today == null ? null : j.ai_left_today; // лимит на ключе (API §14): null — «осталось N» не показываем
   const list = (j.dishes || []).map(fromApi); list.forEach(rememberDish);
@@ -679,6 +683,7 @@ async function serverLast(ctx) { // в кругах и базе пусто: од
   catch (e) { noteServerError(e); return null; }
 }
 function noteServerError(e) {
+  if(e.code==='stale_response')return;
   const F = S.feed; if (F && F.errWarned === e.code) return; if (F) F.errWarned = e.code;
   toast(String(e.message || '').replace(/[.!]?\s*$/, '.') + (KEY_ERRORS.includes(e.code) ? '' : ' Беру блюда из ваших кругов.'));
 }
@@ -732,7 +737,8 @@ async function poolFill() { // один запрос на пополнение; 
   poolFill.p = (async () => {
     const req = poolReq(P, want); let j;
     try { j = await Server.call('/v1/pool', req, {timeout: 45000}); }
-    catch (e) { if(KEY_ERRORS.includes(e.code))poolFill.deniedSig=P.sig; if (!KEY_ERRORS.includes(e.code)) { poolFill.fails = (poolFill.fails || 0) + 1; setTimeout(poolFill, Math.min(60000, 5000 * poolFill.fails)); } return; }
+    catch (e) { if(P.sig!==poolSig()){schedulePool();return;}if(KEY_ERRORS.includes(e.code))poolFill.deniedSig=P.sig; if (!KEY_ERRORS.includes(e.code)) { poolFill.fails = (poolFill.fails || 0) + 1; setTimeout(poolFill, Math.min(60000, 5000 * poolFill.fails)); } return; }
+    if(S.pool!==P||P.sig!==poolSig()){schedulePool();return;}
     poolFill.fails = 0;
     if (req.feedback) S.fbq.splice(0, req.feedback.length);
     if (req.tastes && S.taste.pendingLvl === req.tastes) { S.taste.lvl = req.tastes; delete S.taste.pendingLvl; }
@@ -820,8 +826,8 @@ function applyTheme() {
   const meta = $('meta[name="theme-color"]');
   if (meta) meta.content = getComputedStyle(r).getPropertyValue('--bg').trim();
 }
-/* Lucide SVG subset, ISC/MIT; see site/licenses/lucide.txt. */
-const IC = {"plan":"<path d=\"M8 2v3\" /><path d=\"M16 2v3\" /><rect x=\"3\" y=\"3\" width=\"18\" height=\"18\" rx=\"2\" /><path d=\"M3 9h18\" /><path d=\"M8 13h.01\" /><path d=\"M12 13h.01\" /><path d=\"M16 13h.01\" /><path d=\"M8 17h.01\" /><path d=\"M12 17h.01\" /><path d=\"M16 17h.01\" />","stream":"<path d=\"M15 18h-5\" /><path d=\"M18 14h-8\" /><path d=\"M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-4 0v-9a2 2 0 0 1 2-2h2\" /><rect width=\"8\" height=\"4\" x=\"10\" y=\"6\" rx=\"1\" />","shop":"<path d=\"m15 11-1 9\" /><path d=\"m19 11-4-7\" /><path d=\"M2 11h20\" /><path d=\"m3.5 11 1.6 7.4a2 2 0 0 0 2 1.6h9.8a2 2 0 0 0 2-1.6l1.7-7.4\" /><path d=\"M4.5 15.5h15\" /><path d=\"m5 11 4-7\" /><path d=\"m9 11 1 9\" />","collect":"<path d=\"M13 13.74a2 2 0 0 1-2 0L2.5 8.87a1 1 0 0 1 0-1.74L11 2.26a2 2 0 0 1 2 0l8.5 4.87a1 1 0 0 1 0 1.74z\" /><path d=\"m20 14.285 1.5.845a1 1 0 0 1 0 1.74L13 21.74a2 2 0 0 1-2 0l-8.5-4.87a1 1 0 0 1 0-1.74l1.5-.845\" />","analytics":"<path d=\"M12 16v5\" /><path d=\"M16 14.639V21\" /><path d=\"M20 10.656V21\" /><path d=\"m22 3-8.646 8.646a.5.5 0 0 1-.708 0L9.354 8.354a.5.5 0 0 0-.707 0L2 15\" /><path d=\"M4 18.463V21\" /><path d=\"M8 14.656V21\" />","gear":"<path d=\"M14 17H5\" /><path d=\"M19 7h-9\" /><circle cx=\"17\" cy=\"17\" r=\"3\" /><circle cx=\"7\" cy=\"7\" r=\"3\" />","look":"<path d=\"M12 22a1 1 0 0 1 0-20 10 9 0 0 1 10 9 5 5 0 0 1-5 5h-2.25a1.75 1.75 0 0 0-1.4 2.8l.3.4a1.75 1.75 0 0 1-1.4 2.8z\" /><circle cx=\"13.5\" cy=\"6.5\" r=\".5\" fill=\"currentColor\" /><circle cx=\"17.5\" cy=\"10.5\" r=\".5\" fill=\"currentColor\" /><circle cx=\"6.5\" cy=\"12.5\" r=\".5\" fill=\"currentColor\" /><circle cx=\"8.5\" cy=\"7.5\" r=\".5\" fill=\"currentColor\" />","family":"<path d=\"M18 21a8 8 0 0 0-16 0\" /><circle cx=\"10\" cy=\"8\" r=\"5\" /><path d=\"M22 20c0-3.37-2-6.5-4-8a5 5 0 0 0-.45-8.3\" />","dish":"<path d=\"m16 2-2.3 2.3a3 3 0 0 0 0 4.2l1.8 1.8a3 3 0 0 0 4.2 0L22 8\" /><path d=\"M15 15 3.3 3.3a4.2 4.2 0 0 0 0 6l7.3 7.3c.7.7 2 .7 2.8 0L15 15Zm0 0 7 7\" /><path d=\"m2.1 21.8 6.4-6.3\" /><path d=\"m19 5-7 7\" />","heart":"<path d=\"M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5\" />","shield":"<path d=\"M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z\" /><path d=\"M9 12h6\" /><path d=\"M12 9v6\" />","key":"<path d=\"M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z\" /><circle cx=\"16.5\" cy=\"7.5\" r=\".5\" fill=\"currentColor\" />","history":"<path d=\"M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8\" /><path d=\"M3 3v5h5\" />","data":"<ellipse cx=\"12\" cy=\"5\" rx=\"9\" ry=\"3\" /><path d=\"M3 5V19A9 3 0 0 0 21 19V5\" /><path d=\"M3 12A9 3 0 0 0 21 12\" />","code":"<path d=\"m18 16 4-4-4-4\" /><path d=\"m6 8-4 4 4 4\" /><path d=\"m14.5 4-5 16\" />","chev":"<path d=\"m9 18 6-6-6-6\" />","back":"<path d=\"m15 18-6-6 6-6\" />","leaf":"<path d=\"M11 20a10 10 0 0010-10 25.9 25.9 0 00-1.04-7.281 1 1 0 00-1.755-.325C15.833 5.5 13 5.5 9.8 6.1A7 7 0 0011 20\" /><path d=\"M2 21a5 5 0 012.911-4.544C7.613 15.212 8.351 15.24 11 13\" />","plus":"<path d=\"M5 12h14\" /><path d=\"M12 5v14\" />","down":"<path d=\"m6 9 6 6 6-6\" />","fridge":"<path d=\"M5 6a4 4 0 0 1 4-4h6a4 4 0 0 1 4 4v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6Z\" /><path d=\"M5 10h14\" /><path d=\"M15 7v6\" />"};
+/* Lucide SVG subset (ISC/MIT) plus original navigation glyphs; see site/licenses/lucide.txt. */
+const IC = {"plan":"<rect x=\"3\" y=\"5\" width=\"18\" height=\"16\" rx=\"4\" fill=\"currentColor\" fill-opacity=\".09\"/><path d=\"M7 3v4m10-4v4M3 10h18\"/><path d=\"m8 15 2.5 2.5L16 12\"/>","stream":"<path d=\"M15 18h-5\" /><path d=\"M18 14h-8\" /><path d=\"M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-4 0v-9a2 2 0 0 1 2-2h2\" /><rect width=\"8\" height=\"4\" x=\"10\" y=\"6\" rx=\"1\" />","shop":"<path d=\"M4 9h16l-1.5 10a2 2 0 0 1-2 2h-9a2 2 0 0 1-2-2z\" fill=\"currentColor\" fill-opacity=\".1\"/><path d=\"M8 9V6a4 4 0 0 1 8 0v3M9 14h6\"/>","collect":"<path d=\"M5 10h14v7a4 4 0 0 1-4 4H9a4 4 0 0 1-4-4z\" fill=\"currentColor\" fill-opacity=\".1\"/><path d=\"M3 10h18M2 13h3m14 0h3M9 7c-2-2 2-3 0-5m6 5c-2-2 2-3 0-5\"/>","analytics":"<path d=\"M4 20h16M6 16v-4m6 4V8m6 8V4\"/><circle cx=\"6\" cy=\"9\" r=\"1\" fill=\"currentColor\"/><circle cx=\"12\" cy=\"5\" r=\"1\" fill=\"currentColor\"/><circle cx=\"18\" cy=\"2\" r=\"1\" fill=\"currentColor\"/>","gear":"<path d=\"M4 7h16M4 17h16\"/><rect x=\"7\" y=\"4\" width=\"4\" height=\"6\" rx=\"2\" fill=\"currentColor\" fill-opacity=\".15\"/><rect x=\"14\" y=\"14\" width=\"4\" height=\"6\" rx=\"2\" fill=\"currentColor\" fill-opacity=\".15\"/>","look":"<path d=\"M12 22a1 1 0 0 1 0-20 10 9 0 0 1 10 9 5 5 0 0 1-5 5h-2.25a1.75 1.75 0 0 0-1.4 2.8l.3.4a1.75 1.75 0 0 1-1.4 2.8z\" /><circle cx=\"13.5\" cy=\"6.5\" r=\".5\" fill=\"currentColor\" /><circle cx=\"17.5\" cy=\"10.5\" r=\".5\" fill=\"currentColor\" /><circle cx=\"6.5\" cy=\"12.5\" r=\".5\" fill=\"currentColor\" /><circle cx=\"8.5\" cy=\"7.5\" r=\".5\" fill=\"currentColor\" />","family":"<path d=\"M18 21a8 8 0 0 0-16 0\" /><circle cx=\"10\" cy=\"8\" r=\"5\" /><path d=\"M22 20c0-3.37-2-6.5-4-8a5 5 0 0 0-.45-8.3\" />","dish":"<path d=\"m16 2-2.3 2.3a3 3 0 0 0 0 4.2l1.8 1.8a3 3 0 0 0 4.2 0L22 8\" /><path d=\"M15 15 3.3 3.3a4.2 4.2 0 0 0 0 6l7.3 7.3c.7.7 2 .7 2.8 0L15 15Zm0 0 7 7\" /><path d=\"m2.1 21.8 6.4-6.3\" /><path d=\"m19 5-7 7\" />","heart":"<path d=\"M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5\" />","shield":"<path d=\"M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z\" /><path d=\"M9 12h6\" /><path d=\"M12 9v6\" />","key":"<path d=\"M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z\" /><circle cx=\"16.5\" cy=\"7.5\" r=\".5\" fill=\"currentColor\" />","history":"<path d=\"M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8\" /><path d=\"M3 3v5h5\" />","data":"<ellipse cx=\"12\" cy=\"5\" rx=\"9\" ry=\"3\" /><path d=\"M3 5V19A9 3 0 0 0 21 19V5\" /><path d=\"M3 12A9 3 0 0 0 21 12\" />","code":"<path d=\"m18 16 4-4-4-4\" /><path d=\"m6 8-4 4 4 4\" /><path d=\"m14.5 4-5 16\" />","chev":"<path d=\"m9 18 6-6-6-6\" />","back":"<path d=\"m15 18-6-6 6-6\" />","leaf":"<path d=\"M11 20a10 10 0 0010-10 25.9 25.9 0 00-1.04-7.281 1 1 0 00-1.755-.325C15.833 5.5 13 5.5 9.8 6.1A7 7 0 0011 20\" /><path d=\"M2 21a5 5 0 012.911-4.544C7.613 15.212 8.351 15.24 11 13\" />","plus":"<path d=\"M5 12h14\" /><path d=\"M12 5v14\" />","down":"<path d=\"m6 9 6 6 6-6\" />","fridge":"<path d=\"M5 6a4 4 0 0 1 4-4h6a4 4 0 0 1 4 4v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6Z\" /><path d=\"M5 10h14\" /><path d=\"M15 7v6\" />"};
 const ic = (n, cls = '') => `<svg class="ic ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${IC[n]}</svg>`;
 function appbar(title, sub, opts = {}) {
   return `<header class="appbar">${opts.back ? `<button class="iconbtn" data-back aria-label="Назад">${ic('back')}</button>` : ''}<div class="ab-t"><p class="eyebrow">${sub || 'Мой рацион'}</p><h1 class="gt">${title}</h1></div>${opts.back ? '' : `<button class="iconbtn" data-gear aria-label="Настройки">${ic('gear')}</button>`}</header>`;
@@ -1943,7 +1949,7 @@ function viewSettings() {
     v.innerHTML = `${appbar('Настройки', 'Профиль и приложение', {back: true})}
     <button class="profile" data-person="${me.id}"><span class="mono">${esc(me.name.slice(0, 1).toUpperCase())}</span><span><b>${esc(me.name)}</b><small>${r0(t.E)} ккал · белок ${r0(t.P)} г в день</small></span>${ic('chev', 'sm')}</button>
     <nav class="rows">${SET_PAGES.map(([k, t, s]) => `<button class="row" data-set="${k}"><span class="medal">${ic(SET_IC[k])}</span><span><b>${t}</b><small>${s}</small></span>${ic('chev', 'sm')}</button>`).join('')}</nav>
-    <p class="hint center">Мой рацион · версия 0.21.0</p>`;
+    <p class="hint center">Мой рацион · версия 0.22.0</p>`;
     v.querySelectorAll('[data-set]').forEach(b => b.onclick = () => { openSettingsPage(b.dataset.set); });
     v.querySelector('[data-person]').onclick = () => editPerson(me);
     return;
@@ -1996,10 +2002,10 @@ function viewSettings() {
   v.querySelectorAll('[data-alg]').forEach(b => b.onchange = () => { const k = b.dataset.alg, a = st.allergens = st.allergens || []; b.checked ? a.includes(k) || a.push(k) : a.splice(a.indexOf(k), 1); save(); });
   on('#st-acc-check','onclick',async e=>{
     const button=e.currentTarget;if(button.disabled)return;button.disabled=true;button.textContent='Проверяем…';
-    st.accessKey=$('#st-acc').value.trim();save();
+    const input=$('#st-acc');input.disabled=true;st.accessKey=input.value.trim();const identity=apiIdentity();save();
     try{if(!Server.on()){toast('Ключ сохранён. Проверка — когда будет подключён сервер.');return;}await checkKey();toast('Ключ действует');}
-    catch(error){toast(error.message);}
-    finally{save();render();}
+    catch(error){if(apiIdentity()===identity&&error.code!=='stale_response')toast(error.message);}
+    finally{if(apiIdentity()===identity){save();render();}}
   });
   on('#st-srv', 'onchange', e => { st.serverUrl = e.target.value.trim(); S.access = null; save(); render(); });
   on('#st-bot', 'onchange', e => { st.botUrl = e.target.value.trim(); save(); });
